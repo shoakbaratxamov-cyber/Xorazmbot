@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 # BotFather'dan olgan tokeningiz
-BOT_TOKEN = "8942899247:AAHimpQuuvopoDFUweQXITUQSYCpdrAAtLQ"
+BOT_TOKEN = "BOT_TOKEN"
 
 # Ombor.xlsx faylining nomi
 EXCEL_FILE = "Ombor.xlsx"
