@@ -6,10 +6,10 @@ import os
 from datetime import datetime
 
 # BotFather'dan olgan tokeningiz
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = "8942899247:AAHimpQuuvopoDFUweQXITUQSYCpdrAAtLQ"
 
-# Ombor.xlsx faylining nomi
-EXCEL_FILE = "Ombor.xlsx"
+# Baza.xlsx faylining nomi
+EXCEL_FILE = "Baza.xlsx"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -843,7 +843,7 @@ def kategoriyalarni_korsatish(chat_id):
     try:
         malumotlar = ombor_malumotlarini_oqish()
     except FileNotFoundError:
-        bot.send_message(chat_id, "Xatolik: Ombor.xlsx fayli topilmadi.")
+        bot.send_message(chat_id, "Xatolik: Baza.xlsx fayli topilmadi.")
         return
     except Exception as e:
         bot.send_message(chat_id, f"Xatolik yuz berdi: {e}")
