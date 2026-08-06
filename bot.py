@@ -5,7 +5,7 @@ import json
 import os
 from datetime import datetime
 
-# BotFather'dan olgan tokeningiz
+# BotFather'dan olgan tokeningiz (Railway'ning Variables bo'limidan olinadi)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # Baza.xlsx faylining nomi
@@ -304,19 +304,20 @@ def brend_kategoriya_tanlandi(call):
     topilganlar = []
     for item in mahsulotlar:
         model, soni = item[0], item[1]
+        narxi = item[2] if len(item) > 2 and item[2] else 0
         brend = item[4] if len(item) > 4 else ""
         aksiya_bor = "🎉 " if (len(item) > 5 and item[5]) else ""
         if brend.lower() == tanlangan_brend.lower() and soni and soni > 0:
-            topilganlar.append((model, soni, aksiya_bor))
+            topilganlar.append((model, soni, narxi, aksiya_bor))
 
     if not topilganlar:
         bot.send_message(call.message.chat.id, "Bu kategoriyada hozircha omborda mahsulot yo'q.")
         return
 
     keyboard = types.InlineKeyboardMarkup()
-    for model, soni, aksiya_bor in topilganlar:
+    for model, soni, narxi, aksiya_bor in topilganlar:
         keyboard.add(types.InlineKeyboardButton(
-            text=f"{aksiya_bor}{model}",
+            text=f"{aksiya_bor}{model} — ${narxi:,.2f}",
             callback_data=f"buy:{kategoriya}|{model}"
         ))
 
@@ -668,9 +669,10 @@ def qidiruv_natijasi(message):
     for kategoriya, mahsulotlar in malumotlar.items():
         for item in mahsulotlar:
             model, soni = item[0], item[1]
+            narxi = item[2] if len(item) > 2 and item[2] else 0
             aksiya_bor = "🎉 " if (len(item) > 5 and item[5]) else ""
             if soz in model.lower() and soni and soni > 0:
-                topilganlar.append((kategoriya, model, soni, aksiya_bor))
+                topilganlar.append((kategoriya, model, soni, narxi, aksiya_bor))
 
     if not topilganlar:
         bot.send_message(
@@ -681,9 +683,9 @@ def qidiruv_natijasi(message):
         return
 
     keyboard = types.InlineKeyboardMarkup()
-    for kategoriya, model, soni, aksiya_bor in topilganlar[:30]:
+    for kategoriya, model, soni, narxi, aksiya_bor in topilganlar[:30]:
         keyboard.add(types.InlineKeyboardButton(
-            text=f"{aksiya_bor}{model} ({kategoriya})",
+            text=f"{aksiya_bor}{model} — ${narxi:,.2f} ({kategoriya})",
             callback_data=f"buy:{kategoriya}|{model}"
         ))
 
@@ -884,9 +886,10 @@ def kategoriya_tanlandi(call):
     keyboard = types.InlineKeyboardMarkup()
     for item in mahsulotlar:
         model, soni = item[0], item[1]
+        narxi = item[2] if len(item) > 2 and item[2] else 0
         aksiya_bor = "🎉 " if (len(item) > 5 and item[5]) else ""
         keyboard.add(types.InlineKeyboardButton(
-            text=f"{aksiya_bor}{model}",
+            text=f"{aksiya_bor}{model} — ${narxi:,.2f}",
             callback_data=f"buy:{kategoriya}|{model}"
         ))
 
