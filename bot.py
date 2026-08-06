@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 # BotFather'dan olgan tokeningiz
-BOT_TOKEN = "8942899247:AAEsXl-t_PwvozVSlDJ8BNLgMxXpDcXImB0"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # Baza.xlsx faylining nomi
 EXCEL_FILE = "Baza.xlsx"
