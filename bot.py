@@ -4,6 +4,8 @@ import openpyxl
 import json
 import os
 from datetime import datetime
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
 
 # BotFather'dan olgan tokeningiz (Railway'ning Variables bo'limidan olinadi)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -119,6 +121,54 @@ def ombor_aksiyasini_yangilash(kategoriya, model, aksiya_matni):
 
 
 BUYURTMALAR_FAYLI = "buyurtmalar.json"
+
+
+def buyurtma_raqami(buyurtma_id):
+    return f"INL-{buyurtma_id:07d}"
+
+
+def buyurtma_pdf_yaratish(buyurtma_id, buyurtma):
+    """Buyurtma uchun PDF fayl (invoys) yaratadi va fayl yo'lini qaytaradi."""
+    fayl_nomi = f"/tmp/{buyurtma_raqami(buyurtma_id)}.pdf"
+    c = canvas.Canvas(fayl_nomi, pagesize=A4)
+    width, height = A4
+    y = height - 60
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, y, f"Buyurtma {buyurtma_raqami(buyurtma_id)}")
+    y -= 25
+
+    c.setFont("Helvetica", 11)
+    c.drawString(50, y, f"Sana: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    y -= 18
+    c.drawString(50, y, f"Mijoz: {buyurtma['ism']}")
+    y -= 18
+    c.drawString(50, y, f"Telefon: {buyurtma['telefon']}")
+    y -= 18
+    c.drawString(50, y, f"Manzil: {buyurtma['manzil']}")
+    y -= 30
+
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, y, "Mahsulotlar:")
+    y -= 20
+
+    c.setFont("Helvetica", 10)
+    for item in buyurtma["itemlar"]:
+        summa = item["son"] * item["narxi"]
+        qator = f"{item['model']} ({item['kategoriya']}) — {item['son']} dona x ${item['narxi']:,.2f} = ${summa:,.2f}"
+        c.drawString(60, y, qator)
+        y -= 16
+        if y < 60:
+            c.showPage()
+            y = height - 60
+            c.setFont("Helvetica", 10)
+
+    y -= 15
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(50, y, f"Jami: ${buyurtma['jami_summa']:,.2f}")
+
+    c.save()
+    return fayl_nomi
 
 
 def buyurtmani_saqlash(chat_id, itemlar, ism, telefon, manzil, jami_summa, holat="tasdiqlangan", buyurtma_id=None):
@@ -1192,44 +1242,67 @@ def admin_zakazni_tasdiqlash(call):
     )
 
     if ZAKAZ_GRUPPA_ID:
-        mahsulotlar_matni = ""
-        for item in buyurtma["itemlar"]:
-            summa = item["son"] * item["narxi"]
-            mahsulotlar_matni += (
-                f"📦 {item['model']} ({item['kategoriya']})\n"
-                f"   {item['son']} dona x ${item['narxi']:,.2f} = ${summa:,.2f}\n"
-            )
+        pdf_yolu = buyurtma_pdf_yaratish(buyurtma_id, buyurtma)
 
-        sklad_xabari = (
-            f"🆕 Zakaz #{buyurtma_id} — sklad tasdig'i kutilmoqda\n\n"
-            f"{mahsulotlar_matni}\n"
-            f"💰 Jami: ${buyurtma['jami_summa']:,.2f}\n\n"
-            f"👤 Ism: {buyurtma['ism']}\n"
-            f"📞 Telefon: {buyurtma['telefon']}\n"
-            f"📍 Manzil: {buyurtma['manzil']}"
+        guruh_izohi = (
+            f"🛒 Yangi buyurtma!\n\n"
+            f"{buyurtma_raqami(buyurtma_id)}\n"
+            f"Buyurtma sanasi: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"🏪 Do'kon: {buyurtma['manzil']}\n"
+            f"👤 Buyurtma berdi: {buyurtma['ism']}\n\n"
+            f"❗️ Iltimos buyurtma bilan tanishib chiqib buyurtma statusini belgilang 👇"
         )
 
-        sklad_klaviatura = types.InlineKeyboardMarkup()
-        sklad_klaviatura.add(
-            types.InlineKeyboardButton("✅ Sklad qabul qildi", callback_data=f"sklad_ok:{buyurtma_id}")
+        status_klaviatura = types.InlineKeyboardMarkup()
+        status_klaviatura.add(
+            types.InlineKeyboardButton("📦 Yuk ortilmoqda", callback_data=f"status_yuk:{buyurtma_id}")
+        )
+        status_klaviatura.add(
+            types.InlineKeyboardButton("🚚 Yo'lga chiqdi", callback_data=f"status_yolga:{buyurtma_id}")
         )
 
         try:
-            bot.send_message(ZAKAZ_GRUPPA_ID, sklad_xabari, reply_markup=sklad_klaviatura)
+            with open(pdf_yolu, "rb") as pdf_fayl:
+                bot.send_document(ZAKAZ_GRUPPA_ID, pdf_fayl, caption=guruh_izohi, reply_markup=status_klaviatura)
         except Exception:
             bot.send_message(call.message.chat.id, "⚠️ Zakaz guruhga yuborilmadi — ZAKAZ_GRUPPA_ID to'g'ri sozlanganini tekshiring.")
+        finally:
+            if os.path.exists(pdf_yolu):
+                os.remove(pdf_yolu)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("sklad_ok:"))
-def sklad_zakazni_tasdiqlash(call):
-    bot.answer_callback_query(call.id, "Qabul qilindi!")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("status_yuk:"))
+def status_yuk_belgilash(call):
+    bot.answer_callback_query(call.id, "Belgilandi!")
 
-    buyurtma_id = call.data.split("sklad_ok:", 1)[1]
-    tasdiqlovchi = call.from_user.first_name or call.from_user.username or "Sklad xodimi"
+    buyurtma_id = call.data.split("status_yuk:", 1)[1]
+    yangi_izoh = call.message.caption + "\n\n✅ 📦 Yuk ortilmoqda - statusi belgilandi."
+
+    yangi_klaviatura = types.InlineKeyboardMarkup()
+    yangi_klaviatura.add(
+        types.InlineKeyboardButton("🚚 Yo'lga chiqdi", callback_data=f"status_yolga:{buyurtma_id}")
+    )
 
     try:
-        bot.edit_message_text(
-            call.message.text + f"\n\n✅ SKLAD TOMONIDAN QABUL QILINDI ({tasdiqlovchi})",
+        bot.edit_message_caption(
+            caption=yangi_izoh,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=yangi_klaviatura
+        )
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("status_yolga:"))
+def status_yolga_belgilash(call):
+    bot.answer_callback_query(call.id, "Belgilandi!")
+
+    yangi_izoh = call.message.caption + "\n\n✅ 🚚 Yo'lga chiqdi — statusi belgilandi!"
+
+    try:
+        bot.edit_message_caption(
+            caption=yangi_izoh,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             reply_markup=None
