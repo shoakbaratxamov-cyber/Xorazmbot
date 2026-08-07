@@ -5,6 +5,11 @@ import json
 import os
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
 from reportlab.pdfgen import canvas
 
 # BotFather'dan olgan tokeningiz (Railway'ning Variables bo'limidan olinadi)
@@ -132,47 +137,129 @@ def buyurtma_raqami(buyurtma_id):
     return f"INL-{buyurtma_id:07d}"
 
 
-def buyurtma_pdf_yaratish(buyurtma_id, buyurtma):
-    """Buyurtma uchun PDF fayl (invoys) yaratadi va fayl yo'lini qaytaradi."""
+NORTIX_KOK = colors.HexColor("#1877D6")
+OMBOR_NOMI = "Xorazm ombori"  # Yuboruvchi ombor nomi — kerak bo'lsa shu qatorni o'zgartiring
+
+
+def buyurtma_pdf_yaratish(buyurtma_id, buyurtma, tasdiqlagan_shaxs=None):
+    """Buyurtma uchun 'Yuk xati' PDF hujjatini yaratadi va fayl yo'lini qaytaradi."""
     fayl_nomi = f"/tmp/{buyurtma_raqami(buyurtma_id)}.pdf"
-    c = canvas.Canvas(fayl_nomi, pagesize=A4)
-    width, height = A4
-    y = height - 60
 
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, y, f"Buyurtma {buyurtma_raqami(buyurtma_id)}")
-    y -= 25
+    hujjat = SimpleDocTemplate(
+        fayl_nomi, pagesize=A4,
+        leftMargin=20 * mm, rightMargin=20 * mm,
+        topMargin=15 * mm, bottomMargin=15 * mm
+    )
+    elementlar = []
 
-    c.setFont("Helvetica", 11)
-    c.drawString(50, y, f"Sana: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-    y -= 18
-    c.drawString(50, y, f"Mijoz: {buyurtma['ism']}")
-    y -= 18
-    c.drawString(50, y, f"Telefon: {buyurtma['telefon']}")
-    y -= 18
-    c.drawString(50, y, f"Manzil: {buyurtma['manzil']}")
-    y -= 30
+    logo_stil = ParagraphStyle("logo", fontName="Helvetica-Bold", fontSize=26, textColor=NORTIX_KOK)
+    sarlavha_stil = ParagraphStyle("sarlavha", fontName="Helvetica-Bold", fontSize=20, textColor=NORTIX_KOK, alignment=TA_RIGHT)
+    label_stil = ParagraphStyle("label", fontName="Helvetica", fontSize=9, textColor=colors.grey)
+    qora_qalin_stil = ParagraphStyle("qoraQalin", fontName="Helvetica-Bold", fontSize=11)
+    matn_stil = ParagraphStyle("matn", fontName="Helvetica", fontSize=10, leading=14)
 
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Mahsulotlar:")
-    y -= 20
+    sarlavha_jadval = Table(
+        [[Paragraph("Nortix", logo_stil), Paragraph("YUK XATI", sarlavha_stil)]],
+        colWidths=[85 * mm, 85 * mm]
+    )
+    sarlavha_jadval.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    elementlar.append(sarlavha_jadval)
+    elementlar.append(Spacer(1, 6))
+    elementlar.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#DDDDDD")))
+    elementlar.append(Spacer(1, 12))
 
-    c.setFont("Helvetica", 10)
+    qabul_qiluvchi = [
+        Paragraph("Qabul qiluvchi (do'kon):", label_stil),
+        Paragraph(buyurtma["manzil"], qora_qalin_stil),
+        Paragraph(f"Egasi: {buyurtma['ism']}", matn_stil),
+        Paragraph(f"Tel: {buyurtma['telefon']}", matn_stil),
+    ]
+
+    info_jadval = Table(
+        [[
+            [
+                Paragraph("Faktura raqami:", label_stil),
+                Paragraph(buyurtma_raqami(buyurtma_id), qora_qalin_stil),
+                Spacer(1, 4),
+                Paragraph("Sana:", label_stil),
+                Paragraph(datetime.now().strftime("%d.%m.%Y %H:%M"), matn_stil),
+            ],
+            [
+                Paragraph("Yuboruvchi:", label_stil),
+                Paragraph(OMBOR_NOMI, qora_qalin_stil),
+            ],
+            qabul_qiluvchi,
+        ]],
+        colWidths=[55 * mm, 55 * mm, 60 * mm]
+    )
+    info_jadval.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    elementlar.append(info_jadval)
+    elementlar.append(Spacer(1, 18))
+
+    jadval_malumot = [["Mahsulot nomi", "Miqdori", "Narx", "Summa"]]
     for item in buyurtma["itemlar"]:
         summa = item["son"] * item["narxi"]
-        qator = f"{item['model']} ({item['kategoriya']}) — {item['son']} dona x ${item['narxi']:,.2f} = ${summa:,.2f}"
-        c.drawString(60, y, qator)
-        y -= 16
-        if y < 60:
-            c.showPage()
-            y = height - 60
-            c.setFont("Helvetica", 10)
+        jadval_malumot.append([
+            f"{item['model']} ({item['kategoriya']})",
+            str(item["son"]),
+            f"{item['narxi']:,.0f}",
+            f"{summa:,.0f}",
+        ])
+    jadval_malumot.append(["JAMI", str(sum(i["son"] for i in buyurtma["itemlar"])), "", f"{buyurtma['jami_summa']:,.0f}"])
 
-    y -= 15
-    c.setFont("Helvetica-Bold", 13)
-    c.drawString(50, y, f"Jami: ${buyurtma['jami_summa']:,.2f}")
+    mahsulot_jadval = Table(jadval_malumot, colWidths=[80 * mm, 25 * mm, 25 * mm, 40 * mm])
+    mahsulot_jadval.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), NORTIX_KOK),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#F5F7FA")]),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E3F0FD")),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (0, -1), (0, -1), NORTIX_KOK),
+        ("TEXTCOLOR", (-1, -1), (-1, -1), NORTIX_KOK),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E0E0E0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elementlar.append(mahsulot_jadval)
+    elementlar.append(Spacer(1, 20))
 
-    c.save()
+    tasdiqlovchi_matni = f"Tasdiqladi: Savdo bo'limi ({tasdiqlagan_shaxs})" if tasdiqlagan_shaxs else "Tasdiqladi: Savdo bo'limi"
+    elementlar.append(Paragraph(tasdiqlovchi_matni, matn_stil))
+    elementlar.append(Spacer(1, 30))
+
+    imzo_jadval = Table(
+        [
+            ["_______________________", "_______________________", "_______________________"],
+            ["Sotuvchi", "Omborchi", "Qabul qildi"],
+        ],
+        colWidths=[55 * mm, 55 * mm, 55 * mm]
+    )
+    imzo_jadval.setStyle(TableStyle([
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#BBBBBB")),
+        ("TEXTCOLOR", (0, 1), (-1, 1), colors.grey),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TOPPADDING", (0, 1), (-1, 1), 2),
+    ]))
+    elementlar.append(imzo_jadval)
+    elementlar.append(Spacer(1, 40))
+
+    elementlar.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#DDDDDD")))
+    elementlar.append(Spacer(1, 6))
+    footer_jadval = Table(
+        [[Paragraph("nortix.uz", matn_stil), Paragraph("Nortix", ParagraphStyle("footerLogo", fontName="Helvetica-Bold", fontSize=14, textColor=NORTIX_KOK, alignment=TA_RIGHT))]],
+        colWidths=[85 * mm, 85 * mm]
+    )
+    footer_jadval.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    elementlar.append(footer_jadval)
+
+    hujjat.build(elementlar)
     return fayl_nomi
 
 
@@ -1247,7 +1334,8 @@ def admin_zakazni_tasdiqlash(call):
     )
 
     if NORTIX_SKLAD_GRUPPA_ID:
-        pdf_yolu = buyurtma_pdf_yaratish(buyurtma_id, buyurtma)
+        tasdiqlagan_shaxs = call.from_user.first_name or call.from_user.username or "Nomaʼlum"
+        pdf_yolu = buyurtma_pdf_yaratish(buyurtma_id, buyurtma, tasdiqlagan_shaxs)
 
         guruh_buyurtmalari[buyurtma_id] = {
             "manzil": buyurtma["manzil"],
