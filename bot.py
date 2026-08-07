@@ -180,10 +180,10 @@ ISH_VAQTI = (
 def bosh_menyu_yaratish(user_id=None):
     """Asosiy pastki menyu tugmalari (Brend qo'shildi)"""
     menyu = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    menyu.add(types.KeyboardButton("📦 Mahsulotlar"), types.KeyboardButton("🏷 Brendlar"))
-    menyu.add(types.KeyboardButton("🔍 Qidiruv"), types.KeyboardButton("🛒 Savatim"))
-    menyu.add(types.KeyboardButton("🧾 Buyurtmalarim"), types.KeyboardButton("☎️ Biz bilan bog'lanish"))
-    menyu.add(types.KeyboardButton("📍 Manzilimiz"), types.KeyboardButton("ℹ️ Bot haqida"))
+    menyu.add(types.KeyboardButton("🏷 Brendlar"), types.KeyboardButton("🔍 Qidiruv"))
+    menyu.add(types.KeyboardButton("🛒 Savatim"), types.KeyboardButton("🧾 Buyurtmalarim"))
+    menyu.add(types.KeyboardButton("☎️ Biz bilan bog'lanish"), types.KeyboardButton("📍 Manzilimiz"))
+    menyu.add(types.KeyboardButton("ℹ️ Bot haqida"))
 
     if str(user_id) == str(ADMIN_ID):
         menyu.add(types.KeyboardButton("📷 Mahsulot rasmi"), types.KeyboardButton("🎉 Aksiya qo'shish"))
@@ -224,11 +224,6 @@ def start_handler(message):
         "va zakaz berishingiz mumkin bo'ladi.",
         reply_markup=bosh_menyu_yaratish(message.from_user.id)
     )
-    kategoriyalarni_korsatish(message.chat.id)
-
-
-@bot.message_handler(func=lambda message: message.text == "📦 Mahsulotlar")
-def menyu_mahsulotlar(message):
     kategoriyalarni_korsatish(message.chat.id)
 
 
