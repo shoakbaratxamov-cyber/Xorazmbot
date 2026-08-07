@@ -18,10 +18,14 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # Admin ID
 ADMIN_ID = 199728470
 
-# "ZAKAZ NORTIX" guruhi ID raqami (sklad shu yerda buyurtmalarni qabul qiladi)
+# "ZAKAZ NORTIX" guruhi ID raqami (yangi buyurtmalar shu yerda tasdiqlanadi/bekor qilinadi)
 # Guruhga botni admin qilib qo'shing, guruh ichida /groupid deb yozing — bot sizga ID'ni yuboradi.
 # Keyin shu qatordagi 0 o'rniga o'sha ID'ni (masalan -1001234567890) yozing.
 ZAKAZ_GRUPPA_ID = -5166542981
+
+# "Nortix sklad" guruhi ID raqami (tasdiqlangan buyurtma PDF shu yerga yuboriladi, sklad shu yerda ishlaydi)
+# Xuddi yuqoridagidek, botni shu guruhga ham admin qilib qo'shing va /groupid orqali ID oling.
+NORTIX_SKLAD_GRUPPA_ID = -5345356975
 
 # Holat xotiralari
 yangilash_holati = {}
@@ -1183,7 +1187,7 @@ def zakaz_bosqichlari(message):
             types.InlineKeyboardButton("❌ Bekor qilish", callback_data=f"admin_bekor:{buyurtma_id}"),
         )
 
-        bot.send_message(ADMIN_ID, admin_xabari, reply_markup=tasdiq_klaviatura)
+        bot.send_message(ZAKAZ_GRUPPA_ID, admin_xabari, reply_markup=tasdiq_klaviatura)
 
         bot.send_message(
             message.chat.id,
@@ -1198,7 +1202,7 @@ def zakaz_bosqichlari(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_ok:"))
 def admin_zakazni_tasdiqlash(call):
     bot.answer_callback_query(call.id)
-    if str(call.from_user.id) != str(ADMIN_ID):
+    if str(call.message.chat.id) != str(ZAKAZ_GRUPPA_ID):
         return
 
     buyurtma_id = int(call.data.split("admin_ok:", 1)[1])
@@ -1242,7 +1246,7 @@ def admin_zakazni_tasdiqlash(call):
         f"✅ Zakaz #{buyurtma_id} tasdiqlandi va omborda ayirildi.\n\n{ombor_matni}"
     )
 
-    if ZAKAZ_GRUPPA_ID:
+    if NORTIX_SKLAD_GRUPPA_ID:
         pdf_yolu = buyurtma_pdf_yaratish(buyurtma_id, buyurtma)
 
         guruh_buyurtmalari[buyurtma_id] = {
@@ -1269,9 +1273,9 @@ def admin_zakazni_tasdiqlash(call):
 
         try:
             with open(pdf_yolu, "rb") as pdf_fayl:
-                bot.send_document(ZAKAZ_GRUPPA_ID, pdf_fayl, caption=guruh_izohi, reply_markup=status_klaviatura)
+                bot.send_document(NORTIX_SKLAD_GRUPPA_ID, pdf_fayl, caption=guruh_izohi, reply_markup=status_klaviatura)
         except Exception:
-            bot.send_message(call.message.chat.id, "⚠️ Zakaz guruhga yuborilmadi — ZAKAZ_GRUPPA_ID to'g'ri sozlanganini tekshiring.")
+            bot.send_message(call.message.chat.id, "⚠️ Zakaz Nortix sklad guruhga yuborilmadi — NORTIX_SKLAD_GRUPPA_ID to'g'ri sozlanganini tekshiring.")
         finally:
             if os.path.exists(pdf_yolu):
                 os.remove(pdf_yolu)
@@ -1281,7 +1285,7 @@ def admin_zakazni_tasdiqlash(call):
 def status_yuk_belgilash(call):
     bot.answer_callback_query(call.id, "Belgilandi!")
 
-    buyurtma_id = call.data.split("status_yuk:", 1)[1]
+    buyurtma_id = int(call.data.split("status_yuk:", 1)[1])
     yangi_izoh = call.message.caption + "\n\n✅ 📦 Yuk ortilmoqda - statusi belgilandi."
 
     yangi_klaviatura = types.InlineKeyboardMarkup()
@@ -1298,6 +1302,12 @@ def status_yuk_belgilash(call):
         )
     except Exception:
         pass
+
+    if ZAKAZ_GRUPPA_ID:
+        bot.send_message(
+            ZAKAZ_GRUPPA_ID,
+            f"📦 {buyurtma_raqami(buyurtma_id)} sonli buyurtma: Yuk ortilmoqda"
+        )
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("status_yolga:"))
@@ -1317,19 +1327,19 @@ def status_yolga_belgilash(call):
     except Exception:
         pass
 
-    buyurtma_maʼlumoti = guruh_buyurtmalari.pop(buyurtma_id, None)
-    if buyurtma_maʼlumoti:
-        yakuniy_xabar = (
-            f"📦 {buyurtma_raqami(buyurtma_id)} sonli buyurtma "
-            f"{buyurtma_maʼlumoti['manzil']} do'koniga yetkazildi va qabul qilib oldi ✅"
+    guruh_buyurtmalari.pop(buyurtma_id, None)
+
+    if ZAKAZ_GRUPPA_ID:
+        bot.send_message(
+            ZAKAZ_GRUPPA_ID,
+            f"🚚 {buyurtma_raqami(buyurtma_id)} sonli buyurtma: Yuk chiqib ketdi ✅"
         )
-        bot.send_message(call.message.chat.id, yakuniy_xabar)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_bekor:"))
 def admin_zakazni_bekor_qilish(call):
     bot.answer_callback_query(call.id)
-    if str(call.from_user.id) != str(ADMIN_ID):
+    if str(call.message.chat.id) != str(ZAKAZ_GRUPPA_ID):
         return
 
     buyurtma_id = int(call.data.split("admin_bekor:", 1)[1])
