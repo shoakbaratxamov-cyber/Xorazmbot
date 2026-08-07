@@ -31,6 +31,7 @@ buyurtma_holati = {}
 qidiruv_kutayotganlar = set()
 savat = {}
 kutilayotgan_buyurtmalar = {}
+guruh_buyurtmalari = {}
 buyurtma_id_hisoblagich = {"son": 0}
 
 
@@ -1244,6 +1245,11 @@ def admin_zakazni_tasdiqlash(call):
     if ZAKAZ_GRUPPA_ID:
         pdf_yolu = buyurtma_pdf_yaratish(buyurtma_id, buyurtma)
 
+        guruh_buyurtmalari[buyurtma_id] = {
+            "manzil": buyurtma["manzil"],
+            "ism": buyurtma["ism"],
+        }
+
         guruh_izohi = (
             f"🛒 Yangi buyurtma!\n\n"
             f"{buyurtma_raqami(buyurtma_id)}\n"
@@ -1298,6 +1304,7 @@ def status_yuk_belgilash(call):
 def status_yolga_belgilash(call):
     bot.answer_callback_query(call.id, "Belgilandi!")
 
+    buyurtma_id = int(call.data.split("status_yolga:", 1)[1])
     yangi_izoh = call.message.caption + "\n\n✅ 🚚 Yo'lga chiqdi — statusi belgilandi!"
 
     try:
@@ -1309,6 +1316,14 @@ def status_yolga_belgilash(call):
         )
     except Exception:
         pass
+
+    buyurtma_maʼlumoti = guruh_buyurtmalari.pop(buyurtma_id, None)
+    if buyurtma_maʼlumoti:
+        yakuniy_xabar = (
+            f"📦 {buyurtma_raqami(buyurtma_id)} sonli buyurtma "
+            f"{buyurtma_maʼlumoti['manzil']} do'koniga yetkazildi va qabul qilib oldi ✅"
+        )
+        bot.send_message(call.message.chat.id, yakuniy_xabar)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_bekor:"))
