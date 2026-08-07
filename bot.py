@@ -163,8 +163,12 @@ def barcha_buyurtmalarni_indeks_bilan_olish():
     return list(reversed(list(enumerate(barcha))))
 
 
-KONTAKT_ISM = "Muhiddin"
-KONTAKT_TELEFON = "+998 91 999 40 30"
+KONTAKTLAR = [
+    ("Muhiddin", "+998 91 999 40 30"),
+    ("Durdivoy", "+998 91 422 27 72"),
+    ("Murod", "+998 90 436 63 63"),
+    ("Zafar", "+998 97 033 39 39"),
+]
 KONTAKT_MANZIL = "Toshkent city, Boulevar"
 ISH_VAQTI = (
     "Dushanba: 9:30-18:30\n"
@@ -829,10 +833,10 @@ def menyu_buyurtmalarim(message):
 
 @bot.message_handler(func=lambda message: message.text == "☎️ Biz bilan bog'lanish")
 def menyu_kontakt(message):
+    kontaktlar_matni = "\n".join(f"👤 {ism}: {tel}" for ism, tel in KONTAKTLAR)
     bot.send_message(
         message.chat.id,
-        f"👤 Ism: {KONTAKT_ISM}\n"
-        f"📞 Telefon: {KONTAKT_TELEFON}\n\n"
+        f"{kontaktlar_matni}\n\n"
         f"🕐 Ish vaqti:\n{ISH_VAQTI}"
     )
 
