@@ -836,6 +836,7 @@ def menyu_kontakt(message):
     kontaktlar_matni = "\n".join(f"👤 {ism}: {tel}" for ism, tel in KONTAKTLAR)
     bot.send_message(
         message.chat.id,
+        f"👥 Menedjerlar:\n\n"
         f"{kontaktlar_matni}\n\n"
         f"🕐 Ish vaqti:\n{ISH_VAQTI}"
     )
