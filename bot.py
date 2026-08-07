@@ -19,7 +19,7 @@ ADMIN_ID = 199728470
 # "ZAKAZ NORTIX" guruhi ID raqami (sklad shu yerda buyurtmalarni qabul qiladi)
 # Guruhga botni admin qilib qo'shing, guruh ichida /groupid deb yozing — bot sizga ID'ni yuboradi.
 # Keyin shu qatordagi 0 o'rniga o'sha ID'ni (masalan -1001234567890) yozing.
-ZAKAZ_GRUPPA_ID = 0
+ZAKAZ_GRUPPA_ID = -5166542981
 
 # Holat xotiralari
 yangilash_holati = {}
