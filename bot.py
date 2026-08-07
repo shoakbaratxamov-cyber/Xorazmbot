@@ -16,6 +16,11 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # Admin ID
 ADMIN_ID = 199728470
 
+# "ZAKAZ NORTIX" guruhi ID raqami (sklad shu yerda buyurtmalarni qabul qiladi)
+# Guruhga botni admin qilib qo'shing, guruh ichida /groupid deb yozing — bot sizga ID'ni yuboradi.
+# Keyin shu qatordagi 0 o'rniga o'sha ID'ni (masalan -1001234567890) yozing.
+ZAKAZ_GRUPPA_ID = 0
+
 # Holat xotiralari
 yangilash_holati = {}
 rasm_kutilayotganlar = {}
@@ -217,6 +222,11 @@ def cancel_and_back(message):
         "🏠 Asosiy menyuga qaytdingiz.",
         reply_markup=bosh_menyu_yaratish(user_id)
     )
+
+
+@bot.message_handler(commands=["groupid"])
+def groupid_handler(message):
+    bot.send_message(message.chat.id, f"🆔 Ushbu chat ID: `{message.chat.id}`", parse_mode="Markdown")
 
 
 @bot.message_handler(commands=['start'])
@@ -1180,6 +1190,52 @@ def admin_zakazni_tasdiqlash(call):
         call.message.chat.id,
         f"✅ Zakaz #{buyurtma_id} tasdiqlandi va omborda ayirildi.\n\n{ombor_matni}"
     )
+
+    if ZAKAZ_GRUPPA_ID:
+        mahsulotlar_matni = ""
+        for item in buyurtma["itemlar"]:
+            summa = item["son"] * item["narxi"]
+            mahsulotlar_matni += (
+                f"📦 {item['model']} ({item['kategoriya']})\n"
+                f"   {item['son']} dona x ${item['narxi']:,.2f} = ${summa:,.2f}\n"
+            )
+
+        sklad_xabari = (
+            f"🆕 Zakaz #{buyurtma_id} — sklad tasdig'i kutilmoqda\n\n"
+            f"{mahsulotlar_matni}\n"
+            f"💰 Jami: ${buyurtma['jami_summa']:,.2f}\n\n"
+            f"👤 Ism: {buyurtma['ism']}\n"
+            f"📞 Telefon: {buyurtma['telefon']}\n"
+            f"📍 Manzil: {buyurtma['manzil']}"
+        )
+
+        sklad_klaviatura = types.InlineKeyboardMarkup()
+        sklad_klaviatura.add(
+            types.InlineKeyboardButton("✅ Sklad qabul qildi", callback_data=f"sklad_ok:{buyurtma_id}")
+        )
+
+        try:
+            bot.send_message(ZAKAZ_GRUPPA_ID, sklad_xabari, reply_markup=sklad_klaviatura)
+        except Exception:
+            bot.send_message(call.message.chat.id, "⚠️ Zakaz guruhga yuborilmadi — ZAKAZ_GRUPPA_ID to'g'ri sozlanganini tekshiring.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("sklad_ok:"))
+def sklad_zakazni_tasdiqlash(call):
+    bot.answer_callback_query(call.id, "Qabul qilindi!")
+
+    buyurtma_id = call.data.split("sklad_ok:", 1)[1]
+    tasdiqlovchi = call.from_user.first_name or call.from_user.username or "Sklad xodimi"
+
+    try:
+        bot.edit_message_text(
+            call.message.text + f"\n\n✅ SKLAD TOMONIDAN QABUL QILINDI ({tasdiqlovchi})",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=None
+        )
+    except Exception:
+        pass
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_bekor:"))
