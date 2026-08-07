@@ -1318,9 +1318,11 @@ def admin_zakazni_tasdiqlash(call):
         "✅ Zakazingiz tasdiqlandi! Tez orada siz bilan bog'lanamiz."
     )
 
+    tasdiqlagan_shaxs = call.from_user.first_name or call.from_user.username or "Nomaʼlum"
+
     try:
         bot.edit_message_text(
-            call.message.text + "\n\n✅ TASDIQLANDI",
+            call.message.text + f"\n\n✅ TASDIQLANDI ({tasdiqlagan_shaxs})",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             reply_markup=None
@@ -1330,11 +1332,11 @@ def admin_zakazni_tasdiqlash(call):
 
     bot.send_message(
         call.message.chat.id,
-        f"✅ Zakaz #{buyurtma_id} tasdiqlandi va omborda ayirildi.\n\n{ombor_matni}"
+        f"✅ Zakaz #{buyurtma_id} tasdiqlandi va omborda ayirildi.\n"
+        f"Tasdiqladi: {tasdiqlagan_shaxs}\n\n{ombor_matni}"
     )
 
     if NORTIX_SKLAD_GRUPPA_ID:
-        tasdiqlagan_shaxs = call.from_user.first_name or call.from_user.username or "Nomaʼlum"
         pdf_yolu = buyurtma_pdf_yaratish(buyurtma_id, buyurtma, tasdiqlagan_shaxs)
 
         guruh_buyurtmalari[buyurtma_id] = {
@@ -1447,9 +1449,11 @@ def admin_zakazni_bekor_qilish(call):
         "❌ Afsuski, buyurtmangiz bekor qilindi. Batafsil ma'lumot uchun biz bilan bog'laning."
     )
 
+    bekor_qilgan_shaxs = call.from_user.first_name or call.from_user.username or "Nomaʼlum"
+
     try:
         bot.edit_message_text(
-            call.message.text + "\n\n❌ BEKOR QILINDI",
+            call.message.text + f"\n\n❌ BEKOR QILINDI ({bekor_qilgan_shaxs})",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             reply_markup=None
@@ -1457,7 +1461,10 @@ def admin_zakazni_bekor_qilish(call):
     except Exception:
         pass
 
-    bot.send_message(call.message.chat.id, f"❌ Zakaz #{buyurtma_id} bekor qilindi. Ombor o'zgartirilmadi.")
+    bot.send_message(
+        call.message.chat.id,
+        f"❌ Zakaz #{buyurtma_id} bekor qilindi. Ombor o'zgartirilmadi.\nBekor qildi: {bekor_qilgan_shaxs}"
+    )
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("buyurtma_ochir:"))
