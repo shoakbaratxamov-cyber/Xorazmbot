@@ -506,9 +506,15 @@ def orqaga_menyu_yaratish():
 # RO'YXATDAN O'TISH (Do'kon nomi + Ism + Telefon, so'ng ADMIN TASDIG'I kerak)
 # ==========================================
 FOYDALANUVCHILAR_FAYLI = "foydalanuvchilar.json"
-royxatdan_otganlar = {}      # {"user_id": {"dokon_nomi":..., "ism":..., "telefon":..., "sana":...}} — TASDIQLANGAN
-royxat_holati = {}           # {chat_id: {"bosqich": "dokon_nomi"/"ism"/"telefon", ...}} — to'ldirish jarayoni
-kutilayotgan_royxatlar = {}  # {user_id: {"chat_id":..., "dokon_nomi":..., "ism":..., "telefon":..., "sana":...}} — ADMIN TASDIG'INI KUTMOQDA
+royxatdan_otganlar = {}      # {"user_id": {"dokon_nomi":..., "ism":..., "telefon":..., "viloyat":..., "tuman":..., "sana":...}} — TASDIQLANGAN
+royxat_holati = {}           # {chat_id: {"bosqich": "dokon_nomi"/"ism"/"telefon"/"viloyat"/"tuman", ...}} — to'ldirish jarayoni
+kutilayotgan_royxatlar = {}  # {user_id: {"chat_id":..., "dokon_nomi":..., "ism":..., "telefon":..., "viloyat":..., "tuman":..., "sana":...}} — ADMIN TASDIG'INI KUTMOQDA
+
+VILOYATLAR = [
+    "Andijon", "Buxoro", "Farg'ona", "Jizzax", "Xorazm",
+    "Namangan", "Navoiy", "Qashqadaryo", "Qoraqalpog'iston",
+    "Samarqand", "Sirdaryo", "Surxondaryo", "Toshkent shahri", "Toshkent viloyati",
+]
 
 
 def foydalanuvchilarni_yuklash():
@@ -523,11 +529,13 @@ def foydalanuvchilarni_yuklash():
         royxatdan_otganlar = {}
 
 
-def foydalanuvchini_saqlash(user_id, dokon_nomi, ism, telefon):
+def foydalanuvchini_saqlash(user_id, dokon_nomi, ism, telefon, viloyat, tuman):
     royxatdan_otganlar[str(user_id)] = {
         "dokon_nomi": dokon_nomi,
         "ism": ism,
         "telefon": telefon,
+        "viloyat": viloyat,
+        "tuman": tuman,
         "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     try:
@@ -551,6 +559,14 @@ def tasdiq_kutayotganmi(user_id):
 def royxatdan_otish_klaviaturasi():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     keyboard.add(types.KeyboardButton("📞 Raqamni ulashish", request_contact=True))
+    return keyboard
+
+
+def viloyat_klaviaturasi():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    qatorlar = [VILOYATLAR[i:i + 2] for i in range(0, len(VILOYATLAR), 2)]
+    for qator in qatorlar:
+        keyboard.add(*[types.KeyboardButton(v) for v in qator])
     return keyboard
 
 
@@ -635,8 +651,44 @@ def royxatdan_otish_boshqaruvchisi(message):
             )
             return
 
+        holat["telefon"] = telefon_tozalangan
+        holat["bosqich"] = "viloyat"
+        bot.send_message(
+            chat_id,
+            "🗺 Endi viloyatingizni tanlang:",
+            reply_markup=viloyat_klaviaturasi()
+        )
+        return
+
+    if holat["bosqich"] == "viloyat":
+        viloyat = (message.text or "").strip()
+        if viloyat not in VILOYATLAR:
+            bot.send_message(
+                chat_id,
+                "Iltimos, pastdagi tugmalardan birini tanlang:",
+                reply_markup=viloyat_klaviaturasi()
+            )
+            return
+        holat["viloyat"] = viloyat
+        holat["bosqich"] = "tuman"
+        bot.send_message(
+            chat_id,
+            "🏘 Endi tumaningizni (yoki shahar/mahallangizni) kiriting:",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+        return
+
+    if holat["bosqich"] == "tuman":
+        tuman = (message.text or "").strip()
+        if not tuman or tuman.startswith("/") or len(tuman) < 2:
+            bot.send_message(chat_id, "Iltimos, tuman nomini to'g'ri kiriting:")
+            return
+        holat["tuman"] = tuman
+
         dokon_nomi = holat["dokon_nomi"]
         ism = holat["ism"]
+        telefon_tozalangan = holat["telefon"]
+        viloyat = holat["viloyat"]
 
         # Ariza admin tasdig'iga yuboriladi — hali royxatdan_otganlar'ga qo'shilmaydi
         kutilayotgan_royxatlar[user_id] = {
@@ -644,18 +696,25 @@ def royxatdan_otish_boshqaruvchisi(message):
             "dokon_nomi": dokon_nomi,
             "ism": ism,
             "telefon": telefon_tozalangan,
+            "viloyat": viloyat,
+            "tuman": tuman,
             "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         royxat_holati.pop(chat_id, None)
         holatni_saqlash()
-        log.info("Yangi royxat arizasi: dokon=%s ism=%s tel=%s user_id=%s — admin tasdigini kutmoqda.", dokon_nomi, ism, telefon_tozalangan, user_id)
+        log.info(
+            "Yangi royxat arizasi: dokon=%s ism=%s tel=%s viloyat=%s tuman=%s user_id=%s — admin tasdigini kutmoqda.",
+            dokon_nomi, ism, telefon_tozalangan, viloyat, tuman, user_id,
+        )
 
         bot.send_message(
             chat_id,
             f"✅ Arizangiz qabul qilindi!\n\n"
             f"🏪 Do'kon: {dokon_nomi}\n"
             f"👤 Ism: {ism}\n"
-            f"📞 Telefon: {telefon_tozalangan}\n\n"
+            f"📞 Telefon: {telefon_tozalangan}\n"
+            f"🗺 Viloyat: {viloyat}\n"
+            f"🏘 Tuman: {tuman}\n\n"
             f"⏳ Admin tasdiqlagandan so'ng botdan foydalana olasiz. Iltimos, kuting.",
             reply_markup=types.ReplyKeyboardRemove()
         )
@@ -667,6 +726,8 @@ def royxatdan_otish_boshqaruvchisi(message):
                 f"🏪 Do'kon: {dokon_nomi}\n"
                 f"👤 Ism: {ism}\n"
                 f"📞 Telefon: {telefon_tozalangan}\n"
+                f"🗺 Viloyat: {viloyat}\n"
+                f"🏘 Tuman: {tuman}\n"
                 f"🆔 {user_id}",
                 reply_markup=royxat_tasdiqlash_klaviaturasi(user_id)
             )
@@ -689,7 +750,10 @@ def royxat_tasdiqlash(call):
         bot.send_message(call.message.chat.id, "Bu ariza topilmadi — avval tasdiqlangan yoki rad etilgan bo'lishi mumkin.")
         return
 
-    foydalanuvchini_saqlash(user_id, ariza["dokon_nomi"], ariza["ism"], ariza["telefon"])
+    foydalanuvchini_saqlash(
+        user_id, ariza["dokon_nomi"], ariza["ism"], ariza["telefon"],
+        ariza.get("viloyat", ""), ariza.get("tuman", ""),
+    )
     log.info("Ariza tasdiqlandi: %s (user_id=%s) admin=%s tomonidan.", ariza["ism"], user_id, call.from_user.id)
 
     try:
