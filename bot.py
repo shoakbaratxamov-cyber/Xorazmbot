@@ -3,6 +3,9 @@ from telebot import types
 import openpyxl
 import json
 import os
+import re
+import logging
+import threading
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -12,16 +15,52 @@ from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
 from reportlab.pdfgen import canvas
 
+# ---------------------------------------------------------------------------
+# LOGGING — konsolga va bot.log fayliga yoziladi (xatolarni topish osonlashadi)
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+log = logging.getLogger("nortix_bot")
+
 # BotFather'dan olgan tokeningiz (Railway'ning Variables bo'limidan olinadi)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    log.critical("BOT_TOKEN topilmadi! Railway -> Variables bo'limiga BOT_TOKEN qo'shing.")
+    raise SystemExit("BOT_TOKEN environment o'zgaruvchisi berilmagan.")
 
 # Baza.xlsx faylining nomi
 EXCEL_FILE = "Baza.xlsx"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Admin ID
+# Excel fayl bilan ishlashda bir vaqtda faqat bitta oqim (thread) yozishi uchun qulf.
+# Bot ko'p oqimli (threaded) rejimda ishlagani sabab, bu qulf bo'lmasa ombor sonini
+# bir vaqtda ikki kishi o'zgartirsa, ma'lumot noto'g'ri yozilib qolishi mumkin.
+EXCEL_LOCK = threading.Lock()
+
+# Admin ID(lar). Bir nechta adminni vergul bilan ADMIN_IDS Railway o'zgaruvchisiga yozish mumkin
+# masalan: ADMIN_IDS=199728470,123456789
 ADMIN_ID = 199728470
+_qoshimcha_adminlar = os.getenv("ADMIN_IDS", "")
+ADMIN_IDLAR = {ADMIN_ID}
+for _id in _qoshimcha_adminlar.split(","):
+    _id = _id.strip()
+    if _id.isdigit():
+        ADMIN_IDLAR.add(int(_id))
+
+
+def admin_mi(user_id):
+    """Foydalanuvchi admin/menejerlardan biri ekanini tekshiradi."""
+    try:
+        return int(user_id) in ADMIN_IDLAR
+    except (TypeError, ValueError):
+        return False
 
 # "ZAKAZ NORTIX" guruhi ID raqami (yangi buyurtmalar shu yerda tasdiqlanadi/bekor qilinadi)
 # Guruhga botni admin qilib qo'shing, guruh ichida /groupid deb yozing — bot sizga ID'ni yuboradi.
@@ -31,6 +70,16 @@ ZAKAZ_GRUPPA_ID = -5166542981
 # "Nortix sklad" guruhi ID raqami (tasdiqlangan buyurtma PDF shu yerga yuboriladi, sklad shu yerda ishlaydi)
 # Xuddi yuqoridagidek, botni shu guruhga ham admin qilib qo'shing va /groupid orqali ID oling.
 NORTIX_SKLAD_GRUPPA_ID = -5345356975
+
+# Supergroup ID'lari odatda -100 bilan boshlanadi va 13 xonali bo'ladi (masalan -1001234567890).
+# Agar shu formatga mos kelmasa, ehtimol /groupid orqali olingan ID noto'g'ri kiritilgan.
+for _nomi, _qiymati in (("ZAKAZ_GRUPPA_ID", ZAKAZ_GRUPPA_ID), ("NORTIX_SKLAD_GRUPPA_ID", NORTIX_SKLAD_GRUPPA_ID)):
+    if not str(_qiymati).startswith("-100"):
+        logging.getLogger("nortix_bot").warning(
+            "%s = %s standart supergroup ID formatiga (-100...) mos kelmayapti — "
+            "guruhga xabar yuborilmasligi mumkin, /groupid bilan qayta tekshiring.",
+            _nomi, _qiymati,
+        )
 
 # Holat xotiralari
 yangilash_holati = {}
@@ -44,90 +93,174 @@ guruh_buyurtmalari = {}
 buyurtma_id_hisoblagich = {"son": 0}
 
 
+def _excel_atomik_saqlash(workbook):
+    """Excel faylni avval vaqtinchalik faylga saqlab, keyin asl faylga almashtiradi.
+    Shu tarzda, saqlash paytida bot yiqilib qolsa ham, Baza.xlsx buzilib qolmaydi."""
+    vaqtinchalik = EXCEL_FILE + ".tmp"
+    workbook.save(vaqtinchalik)
+    os.replace(vaqtinchalik, EXCEL_FILE)
+
+
 def ombor_malumotlarini_oqish():
-    workbook = openpyxl.load_workbook(EXCEL_FILE, data_only=True)
-    sheet = workbook.active
+    with EXCEL_LOCK:
+        workbook = openpyxl.load_workbook(EXCEL_FILE, data_only=True)
+        sheet = workbook.active
 
-    malumotlar = {}
-    for row in sheet.iter_rows(min_row=1, values_only=True):
-        # Ustunlar tartibi: A=Brendlar, B=Kategoriya, C=Model, D=SONI, E=Narx, F=Rasm, G=Aksiya
-        brend = row[0]
-        kategoriya, model, soni = row[1], row[2], row[3]
-        narxi = row[4] if len(row) > 4 else None
-        rasm = row[5] if len(row) > 5 else None
-        aksiya = row[6] if len(row) > 6 else None
+        malumotlar = {}
+        for row in sheet.iter_rows(min_row=1, values_only=True):
+            # Ustunlar tartibi: A=Brendlar, B=Kategoriya, C=Model, D=SONI, E=Narx, F=Rasm, G=Aksiya
+            brend = row[0]
+            kategoriya, model, soni = row[1], row[2], row[3]
+            narxi = row[4] if len(row) > 4 else None
+            rasm = row[5] if len(row) > 5 else None
+            aksiya = row[6] if len(row) > 6 else None
 
-        if kategoriya is None or model is None:
-            continue
-        kategoriya = str(kategoriya).strip()
-        model = str(model).strip()
-        brend = str(brend).strip() if brend is not None else ""
-        aksiya = str(aksiya).strip() if aksiya is not None else ""
+            if kategoriya is None or model is None:
+                continue
+            kategoriya = str(kategoriya).strip()
+            model = str(model).strip()
+            brend = str(brend).strip() if brend is not None else ""
+            aksiya = str(aksiya).strip() if aksiya is not None else ""
 
-        if kategoriya.lower() == "kategoriya" or model.lower() == "model":
-            continue
+            if kategoriya.lower() == "kategoriya" or model.lower() == "model":
+                continue
 
-        soni = soni if soni is not None else 0
-        narxi = narxi if narxi is not None else 0
+            soni = soni if soni is not None else 0
+            # Narx validatsiyasi: Excel'da matn/bo'sh kiritilgan bo'lsa, dastur qulamasin.
+            try:
+                narxi = float(narxi) if narxi is not None else 0
+            except (TypeError, ValueError):
+                log.warning("Narx noto'g'ri formatda: kategoriya=%s model=%s narx=%r — 0 sifatida olindi.", kategoriya, model, narxi)
+                narxi = 0
 
-        if kategoriya not in malumotlar:
-            malumotlar[kategoriya] = []
-        malumotlar[kategoriya].append((model, soni, narxi, rasm, brend, aksiya))
+            if kategoriya not in malumotlar:
+                malumotlar[kategoriya] = []
+            malumotlar[kategoriya].append((model, soni, narxi, rasm, brend, aksiya))
 
-    return malumotlar
+        return malumotlar
 
 
 def ombor_sonini_yangilash(kategoriya, model, yangi_soni):
-    workbook = openpyxl.load_workbook(EXCEL_FILE)
-    sheet = workbook.active
+    with EXCEL_LOCK:
+        try:
+            workbook = openpyxl.load_workbook(EXCEL_FILE)
+        except Exception:
+            log.exception("Excel faylni ochishda xatolik (ombor_sonini_yangilash)")
+            return False
+        sheet = workbook.active
 
-    for row in sheet.iter_rows(min_row=1):
-        row_kategoriya = row[1].value
-        row_model = row[2].value
-        if row_kategoriya is None or row_model is None:
-            continue
-        if str(row_kategoriya).strip() == kategoriya and str(row_model).strip() == model:
-            row[3].value = yangi_soni
-            workbook.save(EXCEL_FILE)
-            return True
+        for row in sheet.iter_rows(min_row=1):
+            row_kategoriya = row[1].value
+            row_model = row[2].value
+            if row_kategoriya is None or row_model is None:
+                continue
+            if str(row_kategoriya).strip() == kategoriya and str(row_model).strip() == model:
+                row[3].value = yangi_soni
+                _excel_atomik_saqlash(workbook)
+                return True
 
-    return False
+        return False
 
 
 def ombor_rasmini_yangilash(kategoriya, model, rasm_manzili):
-    workbook = openpyxl.load_workbook(EXCEL_FILE)
-    sheet = workbook.active
-
-    for row in sheet.iter_rows(min_row=1):
-        row_kategoriya = row[1].value
-        row_model = row[2].value
-        if row_kategoriya is None or row_model is None:
-            continue
-        if str(row_kategoriya).strip() == kategoriya and str(row_model).strip() == model:
-            if len(row) > 5:
-                row[5].value = rasm_manzili
-                workbook.save(EXCEL_FILE)
-                return True
+    with EXCEL_LOCK:
+        try:
+            workbook = openpyxl.load_workbook(EXCEL_FILE)
+        except Exception:
+            log.exception("Excel faylni ochishda xatolik (ombor_rasmini_yangilash)")
             return False
+        sheet = workbook.active
 
-    return False
+        for row in sheet.iter_rows(min_row=1):
+            row_kategoriya = row[1].value
+            row_model = row[2].value
+            if row_kategoriya is None or row_model is None:
+                continue
+            if str(row_kategoriya).strip() == kategoriya and str(row_model).strip() == model:
+                # sheet.cell(...) ustundagi ma'lumot mavjudligidan qat'i nazar ishlaydi
+                # (avvalgi `len(row) > 5` tekshiruvi ba'zi Excel fayllarda doim False bo'lib,
+                # rasm hech qachon saqlanmasligiga sabab bo'lardi).
+                sheet.cell(row=row[0].row, column=6).value = rasm_manzili
+                _excel_atomik_saqlash(workbook)
+                return True
 
+        return False
+
+
+# ==========================================
+# HOLATNI SAQLASH (savat, buyurtma jarayoni, tasdiq kutayotgan buyurtmalar)
+# Bot qayta ishga tushganda (Railway deploy/restart) bu ma'lumotlar yo'qolib
+# ketmasligi uchun har necha soniyada avtomatik diskka yoziladi.
+# ==========================================
+HOLAT_FAYLI = "bot_holati.json"
+HOLAT_LOCK = threading.Lock()
+
+
+def holatni_saqlash():
+    with HOLAT_LOCK:
+        try:
+            data = {
+                "savat": {str(k): v for k, v in savat.items()},
+                "buyurtma_holati": {str(k): v for k, v in buyurtma_holati.items()},
+                "kutilayotgan_buyurtmalar": {str(k): v for k, v in kutilayotgan_buyurtmalar.items()},
+                "guruh_buyurtmalari": {str(k): v for k, v in guruh_buyurtmalari.items()},
+            }
+            vaqtinchalik = HOLAT_FAYLI + ".tmp"
+            with open(vaqtinchalik, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(vaqtinchalik, HOLAT_FAYLI)
+        except Exception:
+            log.exception("Holatni saqlashda xatolik")
+
+
+def holatni_yuklash():
+    if not os.path.exists(HOLAT_FAYLI):
+        return
+    try:
+        with open(HOLAT_FAYLI, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        savat.update({int(k): v for k, v in data.get("savat", {}).items()})
+        buyurtma_holati.update({int(k): v for k, v in data.get("buyurtma_holati", {}).items()})
+        kutilayotgan_buyurtmalar.update({int(k): v for k, v in data.get("kutilayotgan_buyurtmalar", {}).items()})
+        guruh_buyurtmalari.update({int(k): v for k, v in data.get("guruh_buyurtmalari", {}).items()})
+
+        log.info(
+            "Oldingi holat tiklandi: savat=%s, jarayondagi_buyurtma=%s, "
+            "tasdiq_kutayotgan=%s, sklad_buyurtmalari=%s",
+            len(savat), len(buyurtma_holati), len(kutilayotgan_buyurtmalar), len(guruh_buyurtmalari),
+        )
+    except Exception:
+        log.exception("Holatni yuklashda xatolik")
+
+
+def avtomatik_saqlash_oqimi():
+    """Fon oqimida har 5 soniyada holatni diskka yozib turadi."""
+    import time
+    while True:
+        time.sleep(5)
+        holatni_saqlash()
 
 def ombor_aksiyasini_yangilash(kategoriya, model, aksiya_matni):
-    workbook = openpyxl.load_workbook(EXCEL_FILE)
-    sheet = workbook.active
+    with EXCEL_LOCK:
+        try:
+            workbook = openpyxl.load_workbook(EXCEL_FILE)
+        except Exception:
+            log.exception("Excel faylni ochishda xatolik (ombor_aksiyasini_yangilash)")
+            return False
+        sheet = workbook.active
 
-    for row in sheet.iter_rows(min_row=1):
-        row_kategoriya = row[1].value
-        row_model = row[2].value
-        if row_kategoriya is None or row_model is None:
-            continue
-        if str(row_kategoriya).strip() == kategoriya and str(row_model).strip() == model:
-            sheet.cell(row=row[0].row, column=7).value = aksiya_matni
-            workbook.save(EXCEL_FILE)
-            return True
+        for row in sheet.iter_rows(min_row=1):
+            row_kategoriya = row[1].value
+            row_model = row[2].value
+            if row_kategoriya is None or row_model is None:
+                continue
+            if str(row_kategoriya).strip() == kategoriya and str(row_model).strip() == model:
+                sheet.cell(row=row[0].row, column=7).value = aksiya_matni
+                _excel_atomik_saqlash(workbook)
+                return True
 
-    return False
+        return False
 
 
 BUYURTMALAR_FAYLI = "buyurtmalar.json"
@@ -135,6 +268,25 @@ BUYURTMALAR_FAYLI = "buyurtmalar.json"
 
 def buyurtma_raqami(buyurtma_id):
     return f"INL-{buyurtma_id:07d}"
+
+
+def hisoblagichni_tiklash():
+    """Bot qayta ishga tushganda buyurtma raqami eski buyurtmalar bilan
+    to'qnashmasligi uchun hisoblagichni buyurtmalar.json'dagi eng katta
+    buyurtma_id'dan davom ettiradi."""
+    eng_katta = 0
+    try:
+        if os.path.exists(BUYURTMALAR_FAYLI):
+            with open(BUYURTMALAR_FAYLI, "r", encoding="utf-8") as f:
+                barcha = json.load(f)
+            for b in barcha:
+                bid = b.get("buyurtma_id") or 0
+                if isinstance(bid, int) and bid > eng_katta:
+                    eng_katta = bid
+    except Exception:
+        log.exception("Buyurtma hisoblagichini tiklashda xatolik")
+    buyurtma_id_hisoblagich["son"] = eng_katta
+    log.info("Buyurtma raqami hisoblagichi %s dan davom etadi.", eng_katta + 1)
 
 
 NORTIX_KOK = colors.HexColor("#1877D6")
@@ -336,7 +488,7 @@ def bosh_menyu_yaratish(user_id=None):
     menyu.add(types.KeyboardButton("☎️ Biz bilan bog'lanish"), types.KeyboardButton("📍 Manzilimiz"))
     menyu.add(types.KeyboardButton("ℹ️ Bot haqida"))
 
-    if str(user_id) == str(ADMIN_ID):
+    if admin_mi(user_id):
         menyu.add(types.KeyboardButton("📷 Mahsulot rasmi"), types.KeyboardButton("🎉 Aksiya qo'shish"))
 
     return menyu
@@ -346,6 +498,136 @@ def orqaga_menyu_yaratish():
     menyu = types.ReplyKeyboardMarkup(resize_keyboard=True)
     menyu.add(types.KeyboardButton("🔙 Orqaga"), types.KeyboardButton("🏠 Bosh menyu"))
     return menyu
+
+
+# ==========================================
+# RO'YXATDAN O'TISH (foydalanuvchi botdan foydalanishdan oldin ism va telefon qoldiradi)
+# ==========================================
+FOYDALANUVCHILAR_FAYLI = "foydalanuvchilar.json"
+royxatdan_otganlar = {}   # {"user_id": {"ism":..., "telefon":..., "sana":...}}
+royxat_holati = {}        # {chat_id: {"bosqich": "ism" / "telefon", "ism": ...}}
+
+
+def foydalanuvchilarni_yuklash():
+    global royxatdan_otganlar
+    try:
+        if os.path.exists(FOYDALANUVCHILAR_FAYLI):
+            with open(FOYDALANUVCHILAR_FAYLI, "r", encoding="utf-8") as f:
+                royxatdan_otganlar = json.load(f)
+            log.info("Ro'yxatdan o'tgan foydalanuvchilar yuklandi: %s ta.", len(royxatdan_otganlar))
+    except Exception:
+        log.exception("Foydalanuvchilar ro'yxatini yuklashda xatolik")
+        royxatdan_otganlar = {}
+
+
+def foydalanuvchini_saqlash(user_id, ism, telefon):
+    royxatdan_otganlar[str(user_id)] = {
+        "ism": ism,
+        "telefon": telefon,
+        "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        vaqtinchalik = FOYDALANUVCHILAR_FAYLI + ".tmp"
+        with open(vaqtinchalik, "w", encoding="utf-8") as f:
+            json.dump(royxatdan_otganlar, f, ensure_ascii=False, indent=2)
+        os.replace(vaqtinchalik, FOYDALANUVCHILAR_FAYLI)
+    except Exception:
+        log.exception("Foydalanuvchini saqlashda xatolik")
+
+
+def royxatdan_otganmi(user_id):
+    return str(user_id) in royxatdan_otganlar
+
+
+def royxatdan_otish_klaviaturasi():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    keyboard.add(types.KeyboardButton("📞 Raqamni ulashish", request_contact=True))
+    return keyboard
+
+
+def royxatdan_otishni_boshlash(chat_id):
+    royxat_holati[chat_id] = {"bosqich": "ism"}
+    bot.send_message(
+        chat_id,
+        "👋 Assalomu alaykum! Xorazm baza savdo botiga xush kelibsiz.\n\n"
+        "Botdan foydalanishdan oldin qisqacha ro'yxatdan o'tishingiz kerak.\n\n"
+        "Ismingizni kiriting:",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+
+
+@bot.message_handler(content_types=['text', 'contact'], func=lambda message: not admin_mi(message.from_user.id) and not royxatdan_otganmi(message.from_user.id))
+def royxatdan_otish_boshqaruvchisi(message):
+    chat_id = message.chat.id
+    holat = royxat_holati.get(chat_id)
+
+    # Foydalanuvchi hali ro'yxatdan o'tish jarayonini boshlamagan bo'lsa (masalan /start yozgan)
+    if holat is None:
+        royxatdan_otishni_boshlash(chat_id)
+        return
+
+    if holat["bosqich"] == "ism":
+        ism = (message.text or "").strip()
+        if not ism or ism.startswith("/") or len(ism) < 2:
+            bot.send_message(chat_id, "Iltimos, to'g'ri ismingizni kiriting:")
+            return
+        holat["ism"] = ism
+        holat["bosqich"] = "telefon"
+        bot.send_message(
+            chat_id,
+            f"Rahmat, {ism}!\n\n"
+            f"Endi telefon raqamingizni yuboring — pastdagi tugmani bosing "
+            f"yoki qo'lda yozing (masalan: +998901234567):",
+            reply_markup=royxatdan_otish_klaviaturasi()
+        )
+        return
+
+    if holat["bosqich"] == "telefon":
+        telefon = None
+        if message.content_type == "contact" and message.contact:
+            telefon = message.contact.phone_number
+        elif message.text:
+            telefon = message.text.strip()
+
+        telefon_tozalangan = (telefon or "").replace(" ", "").replace("-", "")
+        if not telefon_tozalangan or not re.match(r"^\+?\d{9,15}$", telefon_tozalangan):
+            bot.send_message(
+                chat_id,
+                "Telefon raqami noto'g'ri ko'rinyapti. Qaytadan urinib ko'ring "
+                "(masalan: +998901234567) yoki tugmani bosing:",
+                reply_markup=royxatdan_otish_klaviaturasi()
+            )
+            return
+
+        ism = holat["ism"]
+        foydalanuvchini_saqlash(message.from_user.id, ism, telefon_tozalangan)
+        royxat_holati.pop(chat_id, None)
+        log.info("Yangi foydalanuvchi ro'yxatdan o'tdi: %s (%s) — %s", ism, telefon_tozalangan, message.from_user.id)
+
+        bot.send_message(
+            chat_id,
+            f"✅ Ro'yxatdan muvaffaqiyatli o'tdingiz, {ism}!\n\n"
+            f"Bu bot orqali siz ombordagi mahsulotlar qoldig'ini ko'rishingiz "
+            f"va zakaz berishingiz mumkin bo'ladi.",
+            reply_markup=bosh_menyu_yaratish(message.from_user.id)
+        )
+        kategoriyalarni_korsatish(chat_id)
+
+        try:
+            bot.send_message(
+                ZAKAZ_GRUPPA_ID,
+                f"🆕 Yangi foydalanuvchi ro'yxatdan o'tdi:\n"
+                f"👤 {ism}\n📞 {telefon_tozalangan}\n🆔 {message.from_user.id}"
+            )
+        except Exception:
+            log.exception("Yangi foydalanuvchi haqida guruhga xabar yuborishda xatolik")
+        return
+
+
+@bot.callback_query_handler(func=lambda call: not admin_mi(call.from_user.id) and not royxatdan_otganmi(call.from_user.id))
+def royxatdan_otmagan_callback(call):
+    bot.answer_callback_query(call.id, "Avval ro'yxatdan o'ting.", show_alert=True)
+    royxatdan_otishni_boshlash(call.message.chat.id)
 
 
 @bot.message_handler(func=lambda message: message.text in ["🔙 Orqaga", "🏠 Bosh menyu"])
@@ -493,7 +775,7 @@ def brend_kategoriya_tanlandi(call):
 
 # ADMIN RASM BO'LIMI FUNKSIYASI
 def mahsulot_rasmi_menyu_chiqarish(chat_id, user_id):
-    if str(user_id) != str(ADMIN_ID):
+    if not admin_mi(user_id):
         return
 
     try:
@@ -536,7 +818,7 @@ def mahsulot_rasmi_boshlash(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("imgkat:"))
 def rasm_kategoriya_tanlandi(call):
     bot.answer_callback_query(call.id)
-    if str(call.from_user.id) != str(ADMIN_ID):
+    if not admin_mi(call.from_user.id):
         return
 
     kategoriya = call.data.split("imgkat:", 1)[1]
@@ -583,7 +865,7 @@ def back_to_main_admin_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("imgmod:"))
 def rasm_model_tanlandi(call):
     bot.answer_callback_query(call.id)
-    if str(call.from_user.id) != str(ADMIN_ID):
+    if not admin_mi(call.from_user.id):
         return
 
     kategoriya, model = call.data.split("imgmod:", 1)[1].split("|", 1)
@@ -649,7 +931,7 @@ def rasm_yoki_link_qabul_qilish(message):
 
 
 def aksiya_menyu_chiqarish(chat_id, user_id):
-    if str(user_id) != str(ADMIN_ID):
+    if not admin_mi(user_id):
         return
 
     try:
@@ -692,7 +974,7 @@ def aksiya_boshlash(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("aksiyakat:"))
 def aksiya_kategoriya_tanlandi(call):
     bot.answer_callback_query(call.id)
-    if str(call.from_user.id) != str(ADMIN_ID):
+    if not admin_mi(call.from_user.id):
         return
 
     kategoriya = call.data.split("aksiyakat:", 1)[1]
@@ -727,7 +1009,7 @@ def back_to_aksiya_kat_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("aksiyamod:"))
 def aksiya_model_tanlandi(call):
     bot.answer_callback_query(call.id)
-    if str(call.from_user.id) != str(ADMIN_ID):
+    if not admin_mi(call.from_user.id):
         return
 
     kategoriya, model = call.data.split("aksiyamod:", 1)[1].split("|", 1)
@@ -943,7 +1225,7 @@ HOLAT_MATNLARI = {
 
 @bot.message_handler(func=lambda message: message.text == "🧾 Buyurtmalarim")
 def menyu_buyurtmalarim(message):
-    if str(message.from_user.id) == str(ADMIN_ID):
+    if admin_mi(message.from_user.id):
         buyurtmalar = barcha_buyurtmalarni_indeks_bilan_olish()
 
         if not buyurtmalar:
@@ -1257,6 +1539,7 @@ def zakaz_bosqichlari(message):
             "manzil": holat["manzil"],
             "jami_summa": jami_summa,
         }
+        holatni_saqlash()  # darhol diskka yozamiz — yangi buyurtma yo'qolmasligi kerak
 
         admin_xabari = (
             f"🆕 Yangi zakaz #{buyurtma_id} — tasdiq kutilmoqda\n\n"
@@ -1294,6 +1577,7 @@ def admin_zakazni_tasdiqlash(call):
 
     buyurtma_id = int(call.data.split("admin_ok:", 1)[1])
     buyurtma = kutilayotgan_buyurtmalar.pop(buyurtma_id, None)
+    holatni_saqlash()
     if not buyurtma:
         bot.send_message(call.message.chat.id, "Bu buyurtma topilmadi — avval tasdiqlangan yoki bekor qilingan bo'lishi mumkin.")
         return
@@ -1434,6 +1718,7 @@ def admin_zakazni_bekor_qilish(call):
 
     buyurtma_id = int(call.data.split("admin_bekor:", 1)[1])
     buyurtma = kutilayotgan_buyurtmalar.pop(buyurtma_id, None)
+    holatni_saqlash()
     if not buyurtma:
         bot.send_message(call.message.chat.id, "Bu buyurtma topilmadi — avval tasdiqlangan yoki bekor qilingan bo'lishi mumkin.")
         return
@@ -1470,7 +1755,7 @@ def admin_zakazni_bekor_qilish(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("buyurtma_ochir:"))
 def buyurtmani_tarixdan_ochirish(call):
     bot.answer_callback_query(call.id)
-    if str(call.from_user.id) != str(ADMIN_ID):
+    if not admin_mi(call.from_user.id):
         return
 
     idx = int(call.data.split("buyurtma_ochir:", 1)[1])
@@ -1520,7 +1805,7 @@ def buyurtmani_tarixdan_ochirish(call):
 
 @bot.message_handler(content_types=['document'])
 def yangi_fayl_qabul_qilish(message):
-    if str(message.from_user.id) != str(ADMIN_ID):
+    if not admin_mi(message.from_user.id):
         return
 
     fayl_nomi = message.document.file_name or ""
@@ -1532,24 +1817,49 @@ def yangi_fayl_qabul_qilish(message):
         fayl_info = bot.get_file(message.document.file_id)
         yuklab_olingan = bot.download_file(fayl_info.file_path)
 
-        with open(EXCEL_FILE, "wb") as f:
+        vaqtinchalik = EXCEL_FILE + ".yangi_tmp"
+        with open(vaqtinchalik, "wb") as f:
             f.write(yuklab_olingan)
+
+        # Yuklangan fayl haqiqatan ham to'g'ri Excel ekanini tekshiramiz —
+        # buzilgan/noto'g'ri fayl bo'lsa, eski Baza.xlsx saqlanib qoladi.
+        try:
+            tekshiruv = openpyxl.load_workbook(vaqtinchalik, data_only=True)
+            tekshiruv.close()
+        except Exception:
+            os.remove(vaqtinchalik)
+            bot.send_message(message.chat.id, "❌ Fayl buzilgan yoki noto'g'ri formatda — eski ma'lumotlar o'zgarmadi.")
+            return
+
+        with EXCEL_LOCK:
+            # Eski faylni zaxiraga olib qo'yamiz — noto'g'ri fayl kirib ketsa, tiklash mumkin bo'lsin.
+            if os.path.exists(EXCEL_FILE):
+                zaxira_nomi = f"Baza_zaxira_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                try:
+                    import shutil
+                    shutil.copy(EXCEL_FILE, zaxira_nomi)
+                    log.info("Eski Excel fayl zaxiraga olindi: %s", zaxira_nomi)
+                except Exception:
+                    log.exception("Excel zaxira nusxa olishda xatolik")
+            os.replace(vaqtinchalik, EXCEL_FILE)
 
         malumotlar = ombor_malumotlarini_oqish()
         jami_mahsulot = sum(len(v) for v in malumotlar.values())
 
+        log.info("Admin %s tomonidan Excel fayl yangilandi: %s kategoriya, %s model.", message.from_user.id, len(malumotlar), jami_mahsulot)
         bot.send_message(
             message.chat.id,
             f"✅ Ombor fayli yangilandi!\n"
             f"Jami {len(malumotlar)} ta kategoriya, {jami_mahsulot} ta model topildi."
         )
     except Exception as e:
+        log.exception("Yangi Excel fayl qabul qilishda xatolik")
         bot.send_message(message.chat.id, f"Xatolik yuz berdi: {e}")
 
 
 @bot.message_handler(commands=['yangilash'])
 def yangilash_boshlash(message):
-    if str(message.from_user.id) != str(ADMIN_ID):
+    if not admin_mi(message.from_user.id):
         bot.send_message(message.chat.id, "Kechirasiz, bu buyruq faqat admin uchun.")
         return
 
@@ -1577,7 +1887,7 @@ def yangilash_boshlash(message):
 def yangilash_kategoriya_tanlandi(call):
     bot.answer_callback_query(call.id)
 
-    if str(call.from_user.id) != str(ADMIN_ID):
+    if not admin_mi(call.from_user.id):
         return
 
     kategoriya = call.data.split("yangkat:", 1)[1]
@@ -1603,7 +1913,7 @@ def yangilash_kategoriya_tanlandi(call):
 def yangilash_model_tanlandi(call):
     bot.answer_callback_query(call.id)
 
-    if str(call.from_user.id) != str(ADMIN_ID):
+    if not admin_mi(call.from_user.id):
         return
 
     kategoriya, model = call.data.split("yangmodel:", 1)[1].split("|", 1)
@@ -1653,5 +1963,16 @@ def yangi_sonni_qabul_qilish(message):
         )
 
 
-print("Bot ishga tushdi...")
-bot.infinity_polling()
+if __name__ == "__main__":
+    hisoblagichni_tiklash()
+    foydalanuvchilarni_yuklash()
+    holatni_yuklash()
+    threading.Thread(target=avtomatik_saqlash_oqimi, daemon=True).start()
+    log.info("Bot ishga tushdi...")
+    while True:
+        try:
+            bot.infinity_polling(timeout=30, long_polling_timeout=30)
+        except Exception:
+            log.exception("Polling to'xtadi, 5 soniyadan keyin qayta urinamiz...")
+            import time
+            time.sleep(5)
