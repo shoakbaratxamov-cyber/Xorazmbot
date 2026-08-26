@@ -204,6 +204,7 @@ def holatni_saqlash():
                 "buyurtma_holati": {str(k): v for k, v in buyurtma_holati.items()},
                 "kutilayotgan_buyurtmalar": {str(k): v for k, v in kutilayotgan_buyurtmalar.items()},
                 "guruh_buyurtmalari": {str(k): v for k, v in guruh_buyurtmalari.items()},
+                "kutilayotgan_royxatlar": {str(k): v for k, v in kutilayotgan_royxatlar.items()},
             }
             vaqtinchalik = HOLAT_FAYLI + ".tmp"
             with open(vaqtinchalik, "w", encoding="utf-8") as f:
@@ -224,11 +225,12 @@ def holatni_yuklash():
         buyurtma_holati.update({int(k): v for k, v in data.get("buyurtma_holati", {}).items()})
         kutilayotgan_buyurtmalar.update({int(k): v for k, v in data.get("kutilayotgan_buyurtmalar", {}).items()})
         guruh_buyurtmalari.update({int(k): v for k, v in data.get("guruh_buyurtmalari", {}).items()})
+        kutilayotgan_royxatlar.update({int(k): v for k, v in data.get("kutilayotgan_royxatlar", {}).items()})
 
         log.info(
             "Oldingi holat tiklandi: savat=%s, jarayondagi_buyurtma=%s, "
-            "tasdiq_kutayotgan=%s, sklad_buyurtmalari=%s",
-            len(savat), len(buyurtma_holati), len(kutilayotgan_buyurtmalar), len(guruh_buyurtmalari),
+            "tasdiq_kutayotgan_buyurtma=%s, sklad_buyurtmalari=%s, tasdiq_kutayotgan_royxat=%s",
+            len(savat), len(buyurtma_holati), len(kutilayotgan_buyurtmalar), len(guruh_buyurtmalari), len(kutilayotgan_royxatlar),
         )
     except Exception:
         log.exception("Holatni yuklashda xatolik")
@@ -501,11 +503,12 @@ def orqaga_menyu_yaratish():
 
 
 # ==========================================
-# RO'YXATDAN O'TISH (foydalanuvchi botdan foydalanishdan oldin ism va telefon qoldiradi)
+# RO'YXATDAN O'TISH (Do'kon nomi + Ism + Telefon, so'ng ADMIN TASDIG'I kerak)
 # ==========================================
 FOYDALANUVCHILAR_FAYLI = "foydalanuvchilar.json"
-royxatdan_otganlar = {}   # {"user_id": {"ism":..., "telefon":..., "sana":...}}
-royxat_holati = {}        # {chat_id: {"bosqich": "ism" / "telefon", "ism": ...}}
+royxatdan_otganlar = {}      # {"user_id": {"dokon_nomi":..., "ism":..., "telefon":..., "sana":...}} — TASDIQLANGAN
+royxat_holati = {}           # {chat_id: {"bosqich": "dokon_nomi"/"ism"/"telefon", ...}} — to'ldirish jarayoni
+kutilayotgan_royxatlar = {}  # {user_id: {"chat_id":..., "dokon_nomi":..., "ism":..., "telefon":..., "sana":...}} — ADMIN TASDIG'INI KUTMOQDA
 
 
 def foydalanuvchilarni_yuklash():
@@ -520,8 +523,9 @@ def foydalanuvchilarni_yuklash():
         royxatdan_otganlar = {}
 
 
-def foydalanuvchini_saqlash(user_id, ism, telefon):
+def foydalanuvchini_saqlash(user_id, dokon_nomi, ism, telefon):
     royxatdan_otganlar[str(user_id)] = {
+        "dokon_nomi": dokon_nomi,
         "ism": ism,
         "telefon": telefon,
         "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -536,7 +540,12 @@ def foydalanuvchini_saqlash(user_id, ism, telefon):
 
 
 def royxatdan_otganmi(user_id):
+    """Foydalanuvchi ADMIN TOMONIDAN TASDIQLANGAN ro'yxatda bormi (faqat shundagina botdan foydalana oladi)."""
     return str(user_id) in royxatdan_otganlar
+
+
+def tasdiq_kutayotganmi(user_id):
+    return user_id in kutilayotgan_royxatlar
 
 
 def royxatdan_otish_klaviaturasi():
@@ -546,24 +555,51 @@ def royxatdan_otish_klaviaturasi():
 
 
 def royxatdan_otishni_boshlash(chat_id):
-    royxat_holati[chat_id] = {"bosqich": "ism"}
+    royxat_holati[chat_id] = {"bosqich": "dokon_nomi"}
     bot.send_message(
         chat_id,
         "👋 Assalomu alaykum! Xorazm baza savdo botiga xush kelibsiz.\n\n"
-        "Botdan foydalanishdan oldin qisqacha ro'yxatdan o'tishingiz kerak.\n\n"
-        "Ismingizni kiriting:",
+        "Botdan foydalanishdan oldin ro'yxatdan o'tishingiz kerak. "
+        "Ma'lumotlaringiz admin tomonidan tasdiqlangandan keyin botdan foydalana olasiz.\n\n"
+        "🏪 Do'kon nomini kiriting:",
         reply_markup=types.ReplyKeyboardRemove()
     )
+
+
+def royxat_tasdiqlash_klaviaturasi(user_id):
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(
+        types.InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"royxat_tasdiq:{user_id}"),
+        types.InlineKeyboardButton("❌ Rad etish", callback_data=f"royxat_rad:{user_id}"),
+    )
+    return keyboard
 
 
 @bot.message_handler(content_types=['text', 'contact'], func=lambda message: not admin_mi(message.from_user.id) and not royxatdan_otganmi(message.from_user.id))
 def royxatdan_otish_boshqaruvchisi(message):
     chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    # Ariza allaqachon yuborilgan, admin javobini kutmoqda — qayta ro'yxatdan otishni boshlamaymiz
+    if tasdiq_kutayotganmi(user_id):
+        bot.send_message(chat_id, "⏳ Arizangiz hali admin tomonidan ko'rib chiqilmoqda. Iltimos, biroz kuting.")
+        return
+
     holat = royxat_holati.get(chat_id)
 
     # Foydalanuvchi hali ro'yxatdan o'tish jarayonini boshlamagan bo'lsa (masalan /start yozgan)
     if holat is None:
         royxatdan_otishni_boshlash(chat_id)
+        return
+
+    if holat["bosqich"] == "dokon_nomi":
+        dokon_nomi = (message.text or "").strip()
+        if not dokon_nomi or dokon_nomi.startswith("/") or len(dokon_nomi) < 2:
+            bot.send_message(chat_id, "Iltimos, do'kon nomini to'g'ri kiriting:")
+            return
+        holat["dokon_nomi"] = dokon_nomi
+        holat["bosqich"] = "ism"
+        bot.send_message(chat_id, f"Rahmat!\n\n👤 Do'kon egasining ismini kiriting:")
         return
 
     if holat["bosqich"] == "ism":
@@ -576,7 +612,7 @@ def royxatdan_otish_boshqaruvchisi(message):
         bot.send_message(
             chat_id,
             f"Rahmat, {ism}!\n\n"
-            f"Endi telefon raqamingizni yuboring — pastdagi tugmani bosing "
+            f"📞 Endi telefon raqamingizni yuboring — pastdagi tugmani bosing "
             f"yoki qo'lda yozing (masalan: +998901234567):",
             reply_markup=royxatdan_otish_klaviaturasi()
         )
@@ -599,33 +635,118 @@ def royxatdan_otish_boshqaruvchisi(message):
             )
             return
 
+        dokon_nomi = holat["dokon_nomi"]
         ism = holat["ism"]
-        foydalanuvchini_saqlash(message.from_user.id, ism, telefon_tozalangan)
+
+        # Ariza admin tasdig'iga yuboriladi — hali royxatdan_otganlar'ga qo'shilmaydi
+        kutilayotgan_royxatlar[user_id] = {
+            "chat_id": chat_id,
+            "dokon_nomi": dokon_nomi,
+            "ism": ism,
+            "telefon": telefon_tozalangan,
+            "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
         royxat_holati.pop(chat_id, None)
-        log.info("Yangi foydalanuvchi ro'yxatdan o'tdi: %s (%s) — %s", ism, telefon_tozalangan, message.from_user.id)
+        holatni_saqlash()
+        log.info("Yangi royxat arizasi: dokon=%s ism=%s tel=%s user_id=%s — admin tasdigini kutmoqda.", dokon_nomi, ism, telefon_tozalangan, user_id)
 
         bot.send_message(
             chat_id,
-            f"✅ Ro'yxatdan muvaffaqiyatli o'tdingiz, {ism}!\n\n"
-            f"Bu bot orqali siz ombordagi mahsulotlar qoldig'ini ko'rishingiz "
-            f"va zakaz berishingiz mumkin bo'ladi.",
-            reply_markup=bosh_menyu_yaratish(message.from_user.id)
+            f"✅ Arizangiz qabul qilindi!\n\n"
+            f"🏪 Do'kon: {dokon_nomi}\n"
+            f"👤 Ism: {ism}\n"
+            f"📞 Telefon: {telefon_tozalangan}\n\n"
+            f"⏳ Admin tasdiqlagandan so'ng botdan foydalana olasiz. Iltimos, kuting.",
+            reply_markup=types.ReplyKeyboardRemove()
         )
-        kategoriyalarni_korsatish(chat_id)
 
         try:
             bot.send_message(
                 ZAKAZ_GRUPPA_ID,
-                f"🆕 Yangi foydalanuvchi ro'yxatdan o'tdi:\n"
-                f"👤 {ism}\n📞 {telefon_tozalangan}\n🆔 {message.from_user.id}"
+                f"🆕 Yangi ro'yxatdan o'tish arizasi — tasdiq kutilmoqda\n\n"
+                f"🏪 Do'kon: {dokon_nomi}\n"
+                f"👤 Ism: {ism}\n"
+                f"📞 Telefon: {telefon_tozalangan}\n"
+                f"🆔 {user_id}",
+                reply_markup=royxat_tasdiqlash_klaviaturasi(user_id)
             )
         except Exception:
-            log.exception("Yangi foydalanuvchi haqida guruhga xabar yuborishda xatolik")
+            log.exception("Yangi royxat arizasi haqida guruhga xabar yuborishda xatolik")
         return
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("royxat_tasdiq:"))
+def royxat_tasdiqlash(call):
+    bot.answer_callback_query(call.id)
+    if not admin_mi(call.from_user.id):
+        return
+
+    user_id = int(call.data.split("royxat_tasdiq:", 1)[1])
+    ariza = kutilayotgan_royxatlar.pop(user_id, None)
+    holatni_saqlash()
+
+    if not ariza:
+        bot.send_message(call.message.chat.id, "Bu ariza topilmadi — avval tasdiqlangan yoki rad etilgan bo'lishi mumkin.")
+        return
+
+    foydalanuvchini_saqlash(user_id, ariza["dokon_nomi"], ariza["ism"], ariza["telefon"])
+    log.info("Ariza tasdiqlandi: %s (user_id=%s) admin=%s tomonidan.", ariza["ism"], user_id, call.from_user.id)
+
+    try:
+        bot.edit_message_text(
+            call.message.text + f"\n\n✅ TASDIQLANDI (admin: {call.from_user.first_name})",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+        )
+    except Exception:
+        pass
+
+    bot.send_message(
+        ariza["chat_id"],
+        f"✅ Tabriklaymiz, {ariza['ism']}! Arizangiz tasdiqlandi.\n\n"
+        f"Endi botdan to'liq foydalanishingiz mumkin.",
+        reply_markup=bosh_menyu_yaratish(user_id)
+    )
+    kategoriyalarni_korsatish(ariza["chat_id"])
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("royxat_rad:"))
+def royxat_rad_etish(call):
+    bot.answer_callback_query(call.id)
+    if not admin_mi(call.from_user.id):
+        return
+
+    user_id = int(call.data.split("royxat_rad:", 1)[1])
+    ariza = kutilayotgan_royxatlar.pop(user_id, None)
+    holatni_saqlash()
+
+    if not ariza:
+        bot.send_message(call.message.chat.id, "Bu ariza topilmadi — avval tasdiqlangan yoki rad etilgan bo'lishi mumkin.")
+        return
+
+    log.info("Ariza rad etildi: %s (user_id=%s) admin=%s tomonidan.", ariza["ism"], user_id, call.from_user.id)
+
+    try:
+        bot.edit_message_text(
+            call.message.text + f"\n\n❌ RAD ETILDI (admin: {call.from_user.first_name})",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+        )
+    except Exception:
+        pass
+
+    bot.send_message(
+        ariza["chat_id"],
+        "❌ Afsuski, arizangiz rad etildi.\n\n"
+        "Qayta urinish uchun /start ni bosing."
+    )
 
 
 @bot.callback_query_handler(func=lambda call: not admin_mi(call.from_user.id) and not royxatdan_otganmi(call.from_user.id))
 def royxatdan_otmagan_callback(call):
+    if tasdiq_kutayotganmi(call.from_user.id):
+        bot.answer_callback_query(call.id, "Arizangiz hali admin tomonidan ko'rib chiqilmoqda.", show_alert=True)
+        return
     bot.answer_callback_query(call.id, "Avval ro'yxatdan o'ting.", show_alert=True)
     royxatdan_otishni_boshlash(call.message.chat.id)
 
