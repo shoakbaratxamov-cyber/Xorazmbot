@@ -4835,3 +4835,58 @@ def xavfsiz_bosh_menyu(user_id):
     if foydalanuvchi_menejer_mi(user_id):
         return menejer_menu()
     return None
+
+# ============================================================
+# 17-BOSQICH: FINAL TEST / DIAGNOSTIKA
+# Read-only diagnostika. Ma'lumotlarni o'zgartirmaydi.
+# ============================================================
+
+def final_test_natija():
+    natija = []
+
+    try:
+        ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        natija.append("✅ Python sintaksis")
+    except Exception as e:
+        natija.append(f"❌ Python sintaksis: {e}")
+
+    tekshiruvlar = [
+        ("Excel", EXCEL_FILE),
+        ("Menejerlar JSON", MENEDJERLAR_FAYLI),
+        ("Do'konlar JSON", DOKONLAR_FAYLI),
+        ("Savdolar JSON", SAVDOLAR_FAYLI),
+        ("Planlar JSON", PLANLAR_FAYLI),
+        ("Qarzdorlik JSON", QARZDORLIK_FAYLI),
+        ("Rasxodlar JSON", RASXODLAR_FAYLI),
+        ("Buyurtmalar JSON", MENEJER_BUYURTMALAR_FAYLI),
+        ("Vazifalar JSON", VAZIFALAR_FAYLI),
+        ("Hisobotlar JSON", HISOBOTLAR_FAYLI),
+    ]
+
+    for nom, fayl in tekshiruvlar:
+        if os.path.exists(fayl):
+            natija.append(f"✅ {nom}: mavjud")
+        else:
+            natija.append(f"ℹ️ {nom}: hali yaratilmagan")
+
+    if RAHBAR_IDS:
+        natija.append(f"✅ Rahbar ID: {len(RAHBAR_IDS)} ta")
+    else:
+        natija.append("❌ Rahbar ID aniqlanmagan")
+
+    if BOT_TOKEN:
+        natija.append("✅ BOT_TOKEN mavjud")
+    else:
+        natija.append("❌ BOT_TOKEN mavjud emas")
+
+    return "\n".join(natija)
+
+@bot.message_handler(commands=["test"])
+def final_test_command(message):
+    if not rahbar_mi(message.from_user.id):
+        return
+    bot.send_message(
+        message.chat.id,
+        "🧪 <b>FINAL TEST</b>\n\n" + final_test_natija(),
+        parse_mode="HTML"
+    )
