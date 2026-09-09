@@ -3415,3 +3415,197 @@ def order_yolda_callback(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("mbdone:"))
 def order_yetkazildi_callback(call):
     _rahbar_order_status_callback(call, "yetkazildi")
+
+# ============================================================
+# 10-BOSQICH: MENEJERLAR REYTINGI + KPI
+# KPI: plan bajarilishi, savdo, buyurtmalar, qarzdorlik.
+# Reyting asosiy mezoni — plan bajarilish foizi.
+# ============================================================
+
+def joriy_oy():
+    return datetime.now().strftime("%Y-%m")
+
+def menejer_savdosi_oy(uid, oy=None):
+    oy = oy or joriy_oy()
+    jami = 0
+    soni = 0
+    for x in savdolar:
+        if str(x.get("manager_id")) != str(uid):
+            continue
+        sana = str(x.get("sana", ""))
+        if sana.startswith(oy):
+            jami += _float(x.get("total", x.get("summa", 0)))
+            soni += int(_float(x.get("qty", x.get("son", 0))))
+    return jami, soni
+
+def menejer_buyurtma_statistikasi(uid, oy=None):
+    oy = oy or joriy_oy()
+    data = menejer_buyurtmalarini_yuklash()
+    jami = 0
+    soni = 0
+    yetkazilgan = 0
+    tasdiqlangan = 0
+
+    for x in data:
+        if str(x.get("manager_id")) != str(uid):
+            continue
+        if not str(x.get("sana", "")).startswith(oy):
+            continue
+
+        jami += _float(x.get("jami_summa", 0))
+        soni += 1
+        status = x.get("status")
+        if status == "yetkazildi":
+            yetkazilgan += 1
+        if status in {"tasdiqlandi", "tayyorlanmoqda", "yolda", "yetkazildi"}:
+            tasdiqlangan += 1
+
+    return jami, soni, yetkazilgan, tasdiqlangan
+
+def menejer_qarzi_jami(uid):
+    jami = 0
+    for did, d in dokonlar.items():
+        if str(d.get("manager_id")) != str(uid):
+            continue
+        for x in qarzdorlik:
+            if str(x.get("dokon_id")) != str(did):
+                continue
+            if x.get("tur") == "qarz":
+                jami += _float(x.get("summa"))
+            elif x.get("tur") == "tolov":
+                jami -= _float(x.get("summa"))
+    return max(jami, 0)
+
+def menejer_oylik_plan(uid, oy=None):
+    oy = oy or joriy_oy()
+    key = f"{uid}_{oy}"
+    try:
+        return _float(planlar.get(key, 0))
+    except Exception:
+        return 0
+
+def menejer_kpi(uid, oy=None):
+    oy = oy or joriy_oy()
+    plan = menejer_oylik_plan(uid, oy)
+    savdo, qty = menejer_savdosi_oy(uid, oy)
+    _, buyurtma_soni, yetkazilgan, tasdiqlangan = menejer_buyurtma_statistikasi(uid, oy)
+
+    bajarilish = (savdo / plan * 100) if plan > 0 else 0
+
+    return {
+        "plan": plan,
+        "savdo": savdo,
+        "qty": qty,
+        "bajarilish": bajarilish,
+        "buyurtma": buyurtma_soni,
+        "yetkazilgan": yetkazilgan,
+        "tasdiqlangan": tasdiqlangan,
+        "qarz": menejer_qarzi_jami(uid),
+    }
+
+def tasdiqlangan_menejerlar():
+    natija = []
+    for uid, info in menedjerlar.items():
+        try:
+            if info.get("status") == "tasdiqlangan":
+                natija.append((str(uid), info))
+        except Exception:
+            pass
+    return natija
+
+def kpi_reyting_matni(oy=None):
+    oy = oy or joriy_oy()
+    rows = []
+
+    for uid, info in tasdiqlangan_menejerlar():
+        k = menejer_kpi(uid, oy)
+        rows.append((uid, info, k))
+
+    rows.sort(
+        key=lambda z: (
+            z[2]["bajarilish"],
+            z[2]["savdo"],
+            z[2]["yetkazilgan"]
+        ),
+        reverse=True
+    )
+
+    if not rows:
+        return "🏆 Tasdiqlangan menejerlar yo'q."
+
+    medal = ["🥇", "🥈", "🥉"]
+    matn = f"🏆 <b>MENEJERLAR REYTINGI — {oy}</b>\n\n"
+
+    for i, (_, info, k) in enumerate(rows, 1):
+        belgi = medal[i-1] if i <= 3 else f"{i}."
+        matn += (
+            f"{belgi} <b>{info.get('ism', 'Nomsiz')}</b>\n"
+            f"   🎯 Plan: ${k['plan']:,.0f}\n"
+            f"   💰 Savdo: ${k['savdo']:,.0f}\n"
+            f"   📈 Bajarilish: <b>{k['bajarilish']:.1f}%</b>\n"
+            f"   📦 Buyurtmalar: {k['buyurtma']} ta\n"
+            f"   🏁 Yetkazilgan: {k['yetkazilgan']} ta\n"
+            f"   💳 Qarzdorlik: ${k['qarz']:,.0f}\n\n"
+        )
+    return matn
+
+@bot.message_handler(func=lambda m: m.text == "🏆 Menejerlar reytingi" and rahbar_mi(m.from_user.id))
+def rahbar_kpi_reyting(message):
+    bot.send_message(
+        message.chat.id,
+        kpi_reyting_matni(),
+        parse_mode="HTML",
+        reply_markup=rahbar_menu()
+    )
+
+@bot.message_handler(func=lambda m: m.text == "👨‍💼 Menejerlar" and rahbar_mi(m.from_user.id))
+def rahbar_menejerlar_kpi(message):
+    rows = tasdiqlangan_menejerlar()
+    if not rows:
+        bot.send_message(message.chat.id, "Tasdiqlangan menejerlar yo'q.")
+        return
+
+    kb = types.InlineKeyboardMarkup()
+    for uid, info in rows:
+        kb.add(types.InlineKeyboardButton(
+            f"👨‍💼 {info.get('ism', 'Nomsiz')}",
+            callback_data=f"mkpi:{uid}"
+        ))
+    bot.send_message(message.chat.id, "Menejerning KPI hisobotini tanlang:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mkpi:"))
+def rahbar_menejer_kpi_callback(call):
+    bot.answer_callback_query(call.id)
+    if not rahbar_mi(call.from_user.id):
+        return
+
+    uid = call.data.split(":", 1)[1]
+    info = menejer_ol(uid)
+    if not info or info.get("status") != "tasdiqlangan":
+        bot.send_message(call.message.chat.id, "❌ Menejer topilmadi.")
+        return
+
+    k = menejer_kpi(uid)
+    matn = (
+        f"👨‍💼 <b>{info.get('ism', 'Nomsiz')}</b>\n"
+        f"📅 Oy: {joriy_oy()}\n\n"
+        f"🎯 Plan: ${k['plan']:,.0f}\n"
+        f"💰 Savdo: ${k['savdo']:,.0f}\n"
+        f"📈 Plan bajarilishi: <b>{k['bajarilish']:.1f}%</b>\n"
+        f"📦 Sotilgan dona: {k['qty']}\n"
+        f"🛒 Buyurtmalar: {k['buyurtma']} ta\n"
+        f"🏁 Yetkazilgan: {k['yetkazilgan']} ta\n"
+        f"💳 Qarzdorlik: ${k['qarz']:,.0f}"
+    )
+    bot.send_message(call.message.chat.id, matn, parse_mode="HTML")
+
+@bot.message_handler(commands=["kpi"])
+def kpi_command(message):
+    if not rahbar_mi(message.from_user.id):
+        return
+    bot.send_message(
+        message.chat.id,
+        kpi_reyting_matni(),
+        parse_mode="HTML",
+        reply_markup=rahbar_menu()
+    )
