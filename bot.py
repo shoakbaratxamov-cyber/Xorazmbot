@@ -511,6 +511,7 @@ def orqaga_menyu_yaratish():
 MENEDJERLAR_FAYLI = "menedjerlar.json"
 DOKONLAR_FAYLI = "dokonlar.json"
 SAVDOLAR_FAYLI = "savdolar.json"
+PLANLAR_FAYLI = "planlar.json"
 
 menedjer_holati = {}
 dokon_holati = {}
@@ -539,6 +540,7 @@ def json_saqlash(fayl, data):
 menedjerlar = json_yukla(MENEDJERLAR_FAYLI, {})
 dokonlar = json_yukla(DOKONLAR_FAYLI, {})
 savdolar = json_yukla(SAVDOLAR_FAYLI, [])
+planlar = json_yukla(PLANLAR_FAYLI, {})
 
 # Eski holat saqlash funksiyasi bilan moslik uchun (mijoz registratsiyasi ishlatilmaydi)
 kutilayotgan_royxatlar = {}
@@ -825,175 +827,26 @@ def store_assign(call):
         bot.send_message(int(uid), f"🏪 Sizga yangi do'kon biriktirildi: {dokonlar[sid]['nomi']}")
     except Exception: pass
 
-@bot.message_handler(content_types=["text"], func=lambda m: m.from_user.id in dokon_holati and rahbar_mi(m.from_user.id))
-def store_registration(message):
-    uid = message.from_user.id
-    st = dokon_holati.get(uid)
-    if not st: return
-    text = (message.text or "").strip()
-    if text in ("🏠 Bosh menyu","🔙 Orqaga"):
-        dokon_holati.pop(uid,None); bot.send_message(message.chat.id,"🏠",reply_markup=rahbar_menu()); return
-    if st["bosqich"] == "nomi":
-        if len(text)<2: bot.send_message(message.chat.id,"Do'kon nomini kiriting."); return
-        st["nomi"]=text; st["bosqich"]="telefon"
-        bot.send_message(message.chat.id,"📱 Do'kon telefon raqamini kiriting:")
-    elif st["bosqich"] == "telefon":
-        st["telefon"]=text; st["bosqich"]="manzil"
-        bot.send_message(message.chat.id,"📍 Do'kon manzilini kiriting:")
-    elif st["bosqich"] == "manzil":
-        st["manzil"]=text
-        sid = "DOK-" + str(len(dokonlar)+1).zfill(4)
-        while sid in dokonlar:
-            sid = "DOK-" + str(int(sid.split("-")[1])+1).zfill(4)
-        dokonlar[sid] = {
-            "id":sid, "nomi":st["nomi"], "telefon":st["telefon"],
-            "manzil":st["manzil"], "manager_id":None,
-            "sana":datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        json_saqlash(DOKONLAR_FAYLI,dokonlar)
-        dokon_holati.pop(uid,None)
-        bot.send_message(message.chat.id,f"✅ Do'kon qo'shildi: {st['nomi']}",reply_markup=rahbar_menu())
-
-# ---------------- SAVDO KIRITISH ----------------
-@bot.message_handler(func=lambda m: m.text == "🛒 Savdo kiritish")
-def sale_start(message):
-    uid=message.from_user.id
-    if not menejer_tasdiqlangan(uid):
-        bot.send_message(message.chat.id,"❌ Siz tasdiqlangan menejer emassiz."); return
-    ids=my_store_ids(uid)
-    if not ids:
-        bot.send_message(message.chat.id,"❌ Avval sizga do'kon biriktirilishi kerak."); return
-    kb=types.InlineKeyboardMarkup()
-    for sid in ids:
-        kb.add(types.InlineKeyboardButton(dokonlar[sid]["nomi"],callback_data=f"sale_store:{sid}"))
-    bot.send_message(message.chat.id,"🏪 Savdo qaysi do'kon uchun?",reply_markup=kb)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_store:"))
-def sale_store(call):
-    uid=call.from_user.id; sid=call.data.split(":",1)[1]
-    if sid not in my_store_ids(uid):
-        bot.answer_callback_query(call.id,"Bu do'kon sizga biriktirilmagan.",show_alert=True); return
-    savdo_holati[uid]={"bosqich":"kategoriya","dokon_id":sid}
-    bot.answer_callback_query(call.id)
-    try: data=ombor_malumotlarini_oqish()
-    except Exception: data={}
-    kb=types.InlineKeyboardMarkup()
-    for k in data: kb.add(types.InlineKeyboardButton(k,callback_data=f"sale_cat:{k}"))
-    bot.send_message(call.message.chat.id,"📦 Kategoriyani tanlang:",reply_markup=kb)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_cat:"))
-def sale_category(call):
-    uid=call.from_user.id; st=savdo_holati.get(uid)
-    if not st: return
-    cat=call.data.split(":",1)[1]; st["kategoriya"]=cat; st["bosqich"]="model"
-    data=ombor_malumotlarini_oqish()
-    kb=types.InlineKeyboardMarkup()
-    for item in data.get(cat,[]):
-        kb.add(types.InlineKeyboardButton(f"{item[0]} | {item[1]} dona",callback_data=f"sale_model:{cat}|{item[0]}"))
-    bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id,"Modelni tanlang:",reply_markup=kb)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_model:"))
-def sale_model(call):
-    uid=call.from_user.id; st=savdo_holati.get(uid)
-    if not st: return
-    cat,model=call.data.split(":",1)[1].split("|",1)
-    st.update({"kategoriya":cat,"model":model,"bosqich":"son"})
-    bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id,"🔢 Nechta dona sotildi?")
-
-@bot.message_handler(func=lambda m: m.from_user.id in savdo_holati and savdo_holati[m.from_user.id].get("bosqich")=="son")
-def sale_quantity(message):
-    uid=message.from_user.id; st=savdo_holati[uid]
-    if not (message.text or "").isdigit() or int(message.text)<=0:
-        bot.send_message(message.chat.id,"Musbat son kiriting."); return
-    st["son"]=int(message.text); st["bosqich"]="narx"
-    data=ombor_malumotlarini_oqish()
-    item=next((x for x in data.get(st["kategoriya"],[]) if x[0]==st["model"]),None)
-    default_price=item[2] if item else 0
-    bot.send_message(message.chat.id,f"💵 Sotuv narxini kiriting.\nTavsiya narx: ${default_price:,.0f}")
-
-@bot.message_handler(func=lambda m: m.from_user.id in savdo_holati and savdo_holati[m.from_user.id].get("bosqich")=="narx")
-def sale_price(message):
-    uid=message.from_user.id; st=savdo_holati[uid]
-    raw=(message.text or "").replace(" ","").replace(",","")
-    try: price=float(raw)
+@bot.message_handler(func=lambda m: m.from_user.id in dokon_holati and dokon_holati[m.from_user.id].get("bosqich")=="plan" and rahbar_mi(m.from_user.id))
+def plan_value_received(message):
+    uid=message.from_user.id; st=dokon_holati.get(uid)
+    raw=(message.text or "").replace(" ","").replace(",","").replace("$","")
+    try: value=float(raw)
     except:
-        bot.send_message(message.chat.id,"Narxni raqam bilan kiriting."); return
-    item={
-        "id":len(savdolar)+1,
-        "sana":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "manager_id":uid,
-        "dokon_id":st["dokon_id"],
-        "kategoriya":st["kategoriya"],
-        "model":st["model"],
-        "son":st["son"],
-        "narx":price,
-        "summa":st["son"]*price
-    }
-    savdolar.append(item); json_saqlash(SAVDOLAR_FAYLI,savdolar)
-    savdo_holati.pop(uid,None)
+        bot.send_message(message.chat.id,"❌ Plan summasini raqam bilan kiriting."); return
+    if value<0:
+        bot.send_message(message.chat.id,"❌ Plan manfiy bo'lishi mumkin emas."); return
+    mid=str(st["manager_id"]); oy=joriy_oy()
+    planlar.setdefault(mid,{})[oy]=value
+    json_saqlash(PLANLAR_FAYLI,planlar)
+    dokon_holati.pop(uid,None)
+    m=menejer_ol(mid)
     bot.send_message(message.chat.id,
-        f"✅ Savdo saqlandi!\n\n🏪 {dokonlar[item['dokon_id']]['nomi']}\n"
-        f"📦 {item['model']} — {item['son']} dona\n💰 ${item['summa']:,.0f}",
-        reply_markup=menejer_menu())
-
-@bot.message_handler(func=lambda m: m.text == "📊 Mening savdom")
-def my_sales(message):
-    uid=message.from_user.id
-    if not menejer_tasdiqlangan(uid): return
-    rows=[x for x in savdolar if str(x.get("manager_id"))==str(uid)]
-    total=sum(x.get("summa",0) for x in rows)
-    qty=sum(x.get("son",0) for x in rows)
-    bot.send_message(message.chat.id,f"📊 <b>Mening savdom</b>\n\n📦 Mahsulot: {qty} dona\n💰 Jami savdo: ${total:,.0f}\n🧾 Savdo soni: {len(rows)}",parse_mode="HTML")
-
-@bot.message_handler(func=lambda m: m.text == "🎯 Mening planim")
-def my_plan(message):
-    bot.send_message(message.chat.id,"🎯 Plan moduli keyingi bosqichda ulanadi.")
-
-@bot.message_handler(func=lambda m: m.text == "💰 Qarzdorlik")
-def my_debt(message):
-    bot.send_message(message.chat.id,"💰 Qarzdorlik moduli keyingi bosqichda ulanadi.")
-
-@bot.message_handler(func=lambda m: m.text == "💸 Rasxod")
-def my_expense(message):
-    bot.send_message(message.chat.id,"💸 Rasxod moduli keyingi bosqichda ulanadi.")
-
-@bot.message_handler(func=lambda m: m.text == "📦 Buyurtmalar")
-def my_orders(message):
-    bot.send_message(message.chat.id,"📦 Buyurtmalar moduli keyingi bosqichda ulanadi.")
-
-# ---------------- RAHBAR STATISTIKASI ----------------
-@bot.message_handler(func=lambda m: m.text == "👨‍💼 Menejerlar" and rahbar_mi(m.from_user.id))
-def managers_list(message):
-    text="👨‍💼 <b>Menejerlar</b>\n\n"
-    if not menedjerlar: text+="Hozircha menejer yo'q."
-    else:
-        for uid,m in menedjerlar.items():
-            text += f"• {m.get('ism')} — {m.get('status')}\n"
-    bot.send_message(message.chat.id,text,parse_mode="HTML")
-
-@bot.message_handler(func=lambda m: m.text == "📊 Umumiy savdo" and rahbar_mi(m.from_user.id))
-def total_sales(message):
-    total=sum(x.get("summa",0) for x in savdolar)
-    qty=sum(x.get("son",0) for x in savdolar)
-    bot.send_message(message.chat.id,f"📊 <b>Umumiy savdo</b>\n\n📦 {qty} dona\n💰 ${total:,.0f}",parse_mode="HTML")
-
-@bot.message_handler(func=lambda m: m.text == "🏆 Menejerlar reytingi" and rahbar_mi(m.from_user.id))
-def manager_rating(message):
-    stats=[]
-    for uid,m in menedjerlar.items():
-        if m.get("status")!="tasdiqlangan": continue
-        rows=[x for x in savdolar if str(x.get("manager_id"))==str(uid)]
-        stats.append((sum(x.get("summa",0) for x in rows),m.get("ism","")))
-    stats.sort(reverse=True)
-    text="🏆 <b>Menejerlar reytingi</b>\n\n"
-    for i,(total,name) in enumerate(stats,1):
-        text+=f"{i}. {name} — ${total:,.0f}\n"
-    bot.send_message(message.chat.id,text if len(stats) else "Hozircha savdo yo'q.",parse_mode="HTML")
-
-@bot.message_handler(func=lambda m: m.text == "🎯 Planlar" and rahbar_mi(m.from_user.id))
-def plans_admin(message): bot.send_message(message.chat.id,"🎯 Plan moduli keyingi bosqichda ulanadi.")
+        f"✅ {m.get('ism')} uchun {oy} oyi plani ${value:,.0f} qilib saqlandi.",
+        reply_markup=rahbar_menu())
+    try:
+        bot.send_message(int(mid),f"🎯 Sizga {oy} oyi uchun yangi plan belgilandi: ${value:,.0f}")
+    except Exception: pass
 
 @bot.message_handler(func=lambda m: m.text == "💰 Qarzdorlik" and rahbar_mi(m.from_user.id))
 def debt_admin(message): bot.send_message(message.chat.id,"💰 Qarzdorlik moduli keyingi bosqichda ulanadi.")
@@ -2228,3 +2081,229 @@ if __name__ == "__main__":
             log.exception("Polling to'xtadi, 5 soniyadan keyin qayta urinamiz...")
             import time
             time.sleep(5)
+@bot.message_handler(content_types=["text"], func=lambda m: m.from_user.id in dokon_holati and rahbar_mi(m.from_user.id))
+def store_registration(message):
+    uid = message.from_user.id
+    st = dokon_holati.get(uid)
+    if not st: return
+    text = (message.text or "").strip()
+    if text in ("🏠 Bosh menyu","🔙 Orqaga"):
+        dokon_holati.pop(uid,None); bot.send_message(message.chat.id,"🏠",reply_markup=rahbar_menu()); return
+    if st["bosqich"] == "nomi":
+        if len(text)<2: bot.send_message(message.chat.id,"Do'kon nomini kiriting."); return
+        st["nomi"]=text; st["bosqich"]="telefon"
+        bot.send_message(message.chat.id,"📱 Do'kon telefon raqamini kiriting:")
+    elif st["bosqich"] == "telefon":
+        st["telefon"]=text; st["bosqich"]="manzil"
+        bot.send_message(message.chat.id,"📍 Do'kon manzilini kiriting:")
+    elif st["bosqich"] == "manzil":
+        st["manzil"]=text
+        sid = "DOK-" + str(len(dokonlar)+1).zfill(4)
+        while sid in dokonlar:
+            sid = "DOK-" + str(int(sid.split("-")[1])+1).zfill(4)
+        dokonlar[sid] = {
+            "id":sid, "nomi":st["nomi"], "telefon":st["telefon"],
+            "manzil":st["manzil"], "manager_id":None,
+            "sana":datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        json_saqlash(DOKONLAR_FAYLI,dokonlar)
+        dokon_holati.pop(uid,None)
+        bot.send_message(message.chat.id,f"✅ Do'kon qo'shildi: {st['nomi']}",reply_markup=rahbar_menu())
+
+# ---------------- SAVDO KIRITISH ----------------
+@bot.message_handler(func=lambda m: m.text == "🛒 Savdo kiritish")
+def sale_start(message):
+    uid=message.from_user.id
+    if not menejer_tasdiqlangan(uid):
+        bot.send_message(message.chat.id,"❌ Siz tasdiqlangan menejer emassiz."); return
+    ids=my_store_ids(uid)
+    if not ids:
+        bot.send_message(message.chat.id,"❌ Avval sizga do'kon biriktirilishi kerak."); return
+    kb=types.InlineKeyboardMarkup()
+    for sid in ids:
+        kb.add(types.InlineKeyboardButton(dokonlar[sid]["nomi"],callback_data=f"sale_store:{sid}"))
+    bot.send_message(message.chat.id,"🏪 Savdo qaysi do'kon uchun?",reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_store:"))
+def sale_store(call):
+    uid=call.from_user.id; sid=call.data.split(":",1)[1]
+    if sid not in my_store_ids(uid):
+        bot.answer_callback_query(call.id,"Bu do'kon sizga biriktirilmagan.",show_alert=True); return
+    savdo_holati[uid]={"bosqich":"kategoriya","dokon_id":sid}
+    bot.answer_callback_query(call.id)
+    try: data=ombor_malumotlarini_oqish()
+    except Exception: data={}
+    kb=types.InlineKeyboardMarkup()
+    for k in data: kb.add(types.InlineKeyboardButton(k,callback_data=f"sale_cat:{k}"))
+    bot.send_message(call.message.chat.id,"📦 Kategoriyani tanlang:",reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_cat:"))
+def sale_category(call):
+    uid=call.from_user.id; st=savdo_holati.get(uid)
+    if not st: return
+    cat=call.data.split(":",1)[1]; st["kategoriya"]=cat; st["bosqich"]="model"
+    data=ombor_malumotlarini_oqish()
+    kb=types.InlineKeyboardMarkup()
+    for item in data.get(cat,[]):
+        kb.add(types.InlineKeyboardButton(f"{item[0]} | {item[1]} dona",callback_data=f"sale_model:{cat}|{item[0]}"))
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,"Modelni tanlang:",reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_model:"))
+def sale_model(call):
+    uid=call.from_user.id; st=savdo_holati.get(uid)
+    if not st: return
+    cat,model=call.data.split(":",1)[1].split("|",1)
+    st.update({"kategoriya":cat,"model":model,"bosqich":"son"})
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,"🔢 Nechta dona sotildi?")
+
+@bot.message_handler(func=lambda m: m.from_user.id in savdo_holati and savdo_holati[m.from_user.id].get("bosqich")=="son")
+def sale_quantity(message):
+    uid=message.from_user.id; st=savdo_holati[uid]
+    if not (message.text or "").isdigit() or int(message.text)<=0:
+        bot.send_message(message.chat.id,"Musbat son kiriting."); return
+    st["son"]=int(message.text); st["bosqich"]="narx"
+    data=ombor_malumotlarini_oqish()
+    item=next((x for x in data.get(st["kategoriya"],[]) if x[0]==st["model"]),None)
+    default_price=item[2] if item else 0
+    bot.send_message(message.chat.id,f"💵 Sotuv narxini kiriting.\nTavsiya narx: ${default_price:,.0f}")
+
+@bot.message_handler(func=lambda m: m.from_user.id in savdo_holati and savdo_holati[m.from_user.id].get("bosqich")=="narx")
+def sale_price(message):
+    uid=message.from_user.id; st=savdo_holati[uid]
+    raw=(message.text or "").replace(" ","").replace(",","")
+    try: price=float(raw)
+    except:
+        bot.send_message(message.chat.id,"Narxni raqam bilan kiriting."); return
+    item={
+        "id":len(savdolar)+1,
+        "sana":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "manager_id":uid,
+        "dokon_id":st["dokon_id"],
+        "kategoriya":st["kategoriya"],
+        "model":st["model"],
+        "son":st["son"],
+        "narx":price,
+        "summa":st["son"]*price
+    }
+    savdolar.append(item); json_saqlash(SAVDOLAR_FAYLI,savdolar)
+    savdo_holati.pop(uid,None)
+    bot.send_message(message.chat.id,
+        f"✅ Savdo saqlandi!\n\n🏪 {dokonlar[item['dokon_id']]['nomi']}\n"
+        f"📦 {item['model']} — {item['son']} dona\n💰 ${item['summa']:,.0f}",
+        reply_markup=menejer_menu())
+
+@bot.message_handler(func=lambda m: m.text == "📊 Mening savdom")
+def my_sales(message):
+    uid=message.from_user.id
+    if not menejer_tasdiqlangan(uid): return
+    rows=[x for x in savdolar if str(x.get("manager_id"))==str(uid)]
+    total=sum(x.get("summa",0) for x in rows)
+    qty=sum(x.get("son",0) for x in rows)
+    bot.send_message(message.chat.id,f"📊 <b>Mening savdom</b>\n\n📦 Mahsulot: {qty} dona\n💰 Jami savdo: ${total:,.0f}\n🧾 Savdo soni: {len(rows)}",parse_mode="HTML")
+
+def joriy_oy():
+    return datetime.now().strftime("%Y-%m")
+
+def menejer_oylik_savdosi(uid, oy=None):
+    oy = oy or joriy_oy()
+    total = 0
+    for x in savdolar:
+        if str(x.get("manager_id")) != str(uid):
+            continue
+        sana = str(x.get("sana", ""))
+        if sana[:7] == oy:
+            total += float(x.get("summa", 0) or 0)
+    return total
+
+def plan_olish(uid, oy=None):
+    oy = oy or joriy_oy()
+    return float(planlar.get(str(uid), {}).get(oy, 0) or 0)
+
+@bot.message_handler(func=lambda m: m.text == "🎯 Mening planim")
+def my_plan(message):
+    uid=message.from_user.id
+    if not menejer_tasdiqlangan(uid):
+        bot.send_message(message.chat.id,"❌ Siz tasdiqlangan menejer emassiz."); return
+    oy=joriy_oy()
+    plan=plan_olish(uid,oy)
+    savdo=menejer_oylik_savdosi(uid,oy)
+    foiz=(savdo/plan*100) if plan>0 else 0
+    qolgan=max(plan-savdo,0)
+    bot.send_message(message.chat.id,
+        f"🎯 <b>Joriy oy plani — {oy}</b>\n\n"
+        f"🎯 Plan: ${plan:,.0f}\n"
+        f"📊 Savdo: ${savdo:,.0f}\n"
+        f"📈 Bajarilish: {foiz:.1f}%\n"
+        f"💰 Qolgan: ${qolgan:,.0f}",
+        parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "💰 Qarzdorlik")
+def my_debt(message):
+    bot.send_message(message.chat.id,"💰 Qarzdorlik moduli keyingi bosqichda ulanadi.")
+
+@bot.message_handler(func=lambda m: m.text == "💸 Rasxod")
+def my_expense(message):
+    bot.send_message(message.chat.id,"💸 Rasxod moduli keyingi bosqichda ulanadi.")
+
+@bot.message_handler(func=lambda m: m.text == "📦 Buyurtmalar")
+def my_orders(message):
+    bot.send_message(message.chat.id,"📦 Buyurtmalar moduli keyingi bosqichda ulanadi.")
+
+# ---------------- RAHBAR STATISTIKASI ----------------
+@bot.message_handler(func=lambda m: m.text == "👨‍💼 Menejerlar" and rahbar_mi(m.from_user.id))
+def managers_list(message):
+    text="👨‍💼 <b>Menejerlar</b>\n\n"
+    if not menedjerlar: text+="Hozircha menejer yo'q."
+    else:
+        for uid,m in menedjerlar.items():
+            text += f"• {m.get('ism')} — {m.get('status')}\n"
+    bot.send_message(message.chat.id,text,parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "📊 Umumiy savdo" and rahbar_mi(m.from_user.id))
+def total_sales(message):
+    total=sum(x.get("summa",0) for x in savdolar)
+    qty=sum(x.get("son",0) for x in savdolar)
+    bot.send_message(message.chat.id,f"📊 <b>Umumiy savdo</b>\n\n📦 {qty} dona\n💰 ${total:,.0f}",parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "🏆 Menejerlar reytingi" and rahbar_mi(m.from_user.id))
+def manager_rating(message):
+    oy=joriy_oy()
+    stats=[]
+    for uid,m in menedjerlar.items():
+        if m.get("status")!="tasdiqlangan": continue
+        plan=plan_olish(uid,oy)
+        savdo=menejer_oylik_savdosi(uid,oy)
+        foiz=(savdo/plan*100) if plan>0 else 0
+        stats.append((foiz,savdo,plan,m.get("ism","")))
+    stats.sort(key=lambda z:(z[0],z[1]),reverse=True)
+    text=f"🏆 <b>Menejerlar reytingi — {oy}</b>\n\n"
+    for i,(foiz,savdo,plan,name) in enumerate(stats,1):
+        text+=f"{i}. <b>{name}</b> — {foiz:.1f}%\n   📊 ${savdo:,.0f} / ${plan:,.0f}\n"
+    bot.send_message(message.chat.id,text if stats else "Hozircha tasdiqlangan menejer yo'q.",parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "🎯 Planlar" and rahbar_mi(m.from_user.id))
+def plans_admin(message):
+    kb=types.InlineKeyboardMarkup()
+    for uid,m in menedjerlar.items():
+        if m.get("status")=="tasdiqlangan":
+            kb.add(types.InlineKeyboardButton(m.get("ism","Noma'lum"),callback_data=f"plan_mgr:{uid}"))
+    bot.send_message(message.chat.id,"🎯 Qaysi menejerga oylik plan berasiz?",reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("plan_mgr:"))
+def plan_manager_selected(call):
+    if not rahbar_mi(call.from_user.id): return
+    uid=call.data.split(":",1)[1]
+    if not menejer_tasdiqlangan(uid):
+        bot.answer_callback_query(call.id,"Menejer topilmadi",show_alert=True); return
+    call.message.chat.id
+    dokon_holati[call.from_user.id]={"bosqich":"plan","manager_id":int(uid)}
+    bot.answer_callback_query(call.id)
+    m=menejer_ol(uid)
+    bot.send_message(call.message.chat.id,
+        f"🎯 <b>{m.get('ism')}</b> uchun {joriy_oy()} oy planini kiriting.\n\n"
+        f"Masalan: 500000000",
+        parse_mode="HTML",reply_markup=orqaga_menyu_yaratish())
+
+
