@@ -4293,3 +4293,276 @@ def vazifalarni_avtomatik_tekshirish():
 
     if ozgardi:
         vazifalarni_saqlash(data)
+
+# ============================================================
+# 14-BOSQICH: FOTO / VIDEO HISOBOT
+# Menejer vazifaga foto yoki video yuboradi.
+# Rahbar tasdiqlaydi yoki qayta topshirishni so'raydi.
+# ============================================================
+
+HISOBOTLAR_FAYLI = "vazifa_hisobotlar.json"
+
+def hisobotlarni_yuklash():
+    if not os.path.exists(HISOBOTLAR_FAYLI):
+        return []
+    try:
+        with open(HISOBOTLAR_FAYLI, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        log.exception("Hisobotlarni yuklashda xatolik")
+        return []
+
+def hisobotlarni_saqlash(data):
+    tmp = HISOBOTLAR_FAYLI + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, HISOBOTLAR_FAYLI)
+
+def yangi_hisobot_id():
+    data = hisobotlarni_yuklash()
+    mx = 0
+    for x in data:
+        try:
+            mx = max(mx, int(x.get("id", 0)))
+        except Exception:
+            pass
+    return mx + 1
+
+def vazifa_hisobot_tanlash(task_id, user_id):
+    data = vazifalarni_yuklash()
+    for x in data:
+        if int(x.get("id", 0)) == int(task_id):
+            if str(x.get("menejer_id")) == str(user_id):
+                return x
+            return None
+    return None
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("taskreport:"))
+def vazifa_hisobot_boshlash(call):
+    bot.answer_callback_query(call.id)
+    uid = call.from_user.id
+    task_id = int(call.data.split(":", 1)[1])
+
+    task = vazifa_hisobot_tanlash(task_id, uid)
+    if not task:
+        bot.send_message(call.message.chat.id, "❌ Bu vazifa sizga tegishli emas.")
+        return
+
+    if task.get("status") not in {"yangi", "jarayonda", "muddati_otdi"}:
+        bot.send_message(
+            call.message.chat.id,
+            "❌ Bu vazifa uchun hisobot yuborish holati mavjud emas."
+        )
+        return
+
+    vazifa_holati[uid] = {
+        "bosqich": "hisobot_media",
+        "task_id": task_id
+    }
+    bot.send_message(
+        call.message.chat.id,
+        "📸 Foto yoki 🎥 video yuboring.\n\n"
+        "Bu vazifa bo'yicha rahbarga hisobot sifatida yuboriladi."
+    )
+
+@bot.message_handler(
+    content_types=["photo", "video"],
+    func=lambda m: m.from_user.id in vazifa_holati
+)
+def vazifa_media_qabul(message):
+    uid = message.from_user.id
+    state = vazifa_holati.get(uid)
+
+    if not state or state.get("bosqich") != "hisobot_media":
+        return
+
+    task_id = int(state["task_id"])
+    task = vazifa_hisobot_tanlash(task_id, uid)
+    if not task:
+        vazifa_holati.pop(uid, None)
+        bot.send_message(message.chat.id, "❌ Vazifa topilmadi.")
+        return
+
+    media_type = "photo" if message.content_type == "photo" else "video"
+
+    if media_type == "photo":
+        file_id = message.photo[-1].file_id
+    else:
+        file_id = message.video.file_id
+
+    hid = yangi_hisobot_id()
+    report = {
+        "id": hid,
+        "task_id": task_id,
+        "menejer_id": uid,
+        "menejer_ism": task.get("menejer_ism", ""),
+        "rahbar_id": task.get("bergan_rahbar_id"),
+        "media_type": media_type,
+        "file_id": file_id,
+        "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "status": "kutilmoqda",
+        "izoh": ""
+    }
+
+    data = hisobotlarni_yuklash()
+    data.append(report)
+    hisobotlarni_saqlash(data)
+
+    # Vazifani avtomatik "hisobot_kutilmoqda" holatiga o'tkazmaymiz:
+    # menejer bajarildi tugmasini alohida bosishi mumkin.
+    vazifa_holati.pop(uid, None)
+
+    bot.send_message(
+        message.chat.id,
+        f"📤 Hisobot #{hid} rahbarga yuborildi.\n"
+        f"🎯 Vazifa #{task_id}"
+    )
+
+    rahbar_id = task.get("bergan_rahbar_id")
+    try:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton(
+                "✅ Hisobotni tasdiqlash",
+                callback_data=f"hrok:{hid}"
+            ),
+            types.InlineKeyboardButton(
+                "🔄 Qayta yuborish",
+                callback_data=f"hrretry:{hid}"
+            )
+        )
+
+        caption = (
+            f"📸 <b>Vazifa hisoboti #{hid}</b>\n"
+            f"🎯 Vazifa #{task_id}\n"
+            f"👨‍💼 Menejer: {task.get('menejer_ism', '')}\n"
+            f"📝 {task.get('matn', '')}\n"
+            f"📅 {task.get('deadline', '')}"
+        )
+
+        if media_type == "photo":
+            bot.send_photo(
+                int(rahbar_id),
+                file_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+        else:
+            bot.send_video(
+                int(rahbar_id),
+                file_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+    except Exception:
+        log.exception("Rahbarga media hisobot yuborishda xatolik")
+
+def hisobot_status_yangila(hid, status):
+    data = hisobotlarni_yuklash()
+    for x in data:
+        if int(x.get("id", 0)) == int(hid):
+            x["status"] = status
+            x["status_vaqti"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            hisobotlarni_saqlash(data)
+            return x
+    return None
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("hrok:"))
+def hisobot_tasdiqlash_callback(call):
+    bot.answer_callback_query(call.id)
+    if not rahbar_mi(call.from_user.id):
+        return
+
+    hid = int(call.data.split(":", 1)[1])
+    report = hisobot_status_yangila(hid, "tasdiqlandi")
+    if not report:
+        bot.send_message(call.message.chat.id, "❌ Hisobot topilmadi.")
+        return
+
+    try:
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=None
+        )
+    except Exception:
+        pass
+
+    # Hisobot tasdiqlanganda tegishli vazifa bajarildi qilinadi.
+    task_id = report.get("task_id")
+    tasks = vazifalarni_yuklash()
+    for task in tasks:
+        if int(task.get("id", 0)) == int(task_id):
+            task["status"] = "bajarildi"
+            task["bajarilgan_vaqt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            task["hisobot_id"] = hid
+            break
+    vazifalarni_saqlash(tasks)
+
+    try:
+        bot.send_message(
+            int(report["menejer_id"]),
+            f"✅ Hisobotingiz tasdiqlandi.\n"
+            f"📸 Hisobot #{hid}\n"
+            f"🎯 Vazifa #{task_id} bajarilgan deb qabul qilindi."
+        )
+    except Exception:
+        pass
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("hrretry:"))
+def hisobot_qayta_callback(call):
+    bot.answer_callback_query(call.id)
+    if not rahbar_mi(call.from_user.id):
+        return
+
+    hid = int(call.data.split(":", 1)[1])
+    report = hisobot_status_yangila(hid, "qayta_yuborish")
+    if not report:
+        bot.send_message(call.message.chat.id, "❌ Hisobot topilmadi.")
+        return
+
+    try:
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=None
+        )
+    except Exception:
+        pass
+
+    try:
+        bot.send_message(
+            int(report["menejer_id"]),
+            f"🔄 Hisobot #{hid} qayta yuborilishi kerak.\n"
+            f"🎯 Vazifa #{report['task_id']}\n"
+            f"📸 Yangi foto yoki video yuboring."
+        )
+    except Exception:
+        pass
+
+@bot.message_handler(func=lambda m: m.text == "📸 Hisobotlarim" and menejer_mi(m.from_user.id))
+def menejer_hisobotlarim(message):
+    data = hisobotlarni_yuklash()
+    mine = [x for x in data if str(x.get("menejer_id")) == str(message.from_user.id)]
+
+    if not mine:
+        bot.send_message(message.chat.id, "📸 Hozircha hisobotlaringiz yo'q.")
+        return
+
+    statuslar = {
+        "kutilmoqda": "🕐 Kutilmoqda",
+        "tasdiqlandi": "✅ Tasdiqlandi",
+        "qayta_yuborish": "🔄 Qayta yuborish",
+    }
+
+    matn = "📸 <b>Hisobotlarim</b>\n\n"
+    for x in reversed(mine[-30:]):
+        matn += (
+            f"#{x['id']} — 🎯 Vazifa #{x['task_id']}\n"
+            f"📅 {x['sana']}\n"
+            f"📌 {statuslar.get(x.get('status'), x.get('status'))}\n\n"
+        )
+    bot.send_message(message.chat.id, matn, parse_mode="HTML", reply_markup=menejer_menu())
