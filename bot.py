@@ -877,19 +877,6 @@ def expense_admin(message):
         text += "\n"
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
-@bot.message_handler(func=lambda m: m.text == "📈 Savdo analitikasi" and rahbar_mi(m.from_user.id))
-def analytics_admin(message):
-    by_cat={}
-    by_model={}
-    for x in savdolar:
-        by_cat[x["kategoriya"]]=by_cat.get(x["kategoriya"],0)+x.get("summa",0)
-        by_model[x["model"]]=by_model.get(x["model"],0)+x.get("summa",0)
-    text="📈 <b>Savdo analitikasi</b>\n\n<b>Kategoriya:</b>\n"
-    for k,v in sorted(by_cat.items(),key=lambda z:z[1],reverse=True): text+=f"• {k}: ${v:,.0f}\n"
-    text+="\n<b>Model:</b>\n"
-    for k,v in sorted(by_model.items(),key=lambda z:z[1],reverse=True)[:20]: text+=f"• {k}: ${v:,.0f}\n"
-    bot.send_message(message.chat.id,text,parse_mode="HTML")
-
 @bot.message_handler(func=lambda m: m.text == "🔄 Ombor sonini yangilash" and rahbar_mi(m.from_user.id))
 def stock_update_alias(message):
     # Eski /yangilash funksiyasidan foydalanish uchun
@@ -2639,28 +2626,6 @@ def managers_list(message):
             text += f"• {m.get('ism')} — {m.get('status')}\n"
     bot.send_message(message.chat.id,text,parse_mode="HTML")
 
-@bot.message_handler(func=lambda m: m.text == "📊 Umumiy savdo" and rahbar_mi(m.from_user.id))
-def total_sales(message):
-    total=sum(x.get("summa",0) for x in savdolar)
-    qty=sum(x.get("son",0) for x in savdolar)
-    bot.send_message(message.chat.id,f"📊 <b>Umumiy savdo</b>\n\n📦 {qty} dona\n💰 ${total:,.0f}",parse_mode="HTML")
-
-@bot.message_handler(func=lambda m: m.text == "🏆 Menejerlar reytingi" and rahbar_mi(m.from_user.id))
-def manager_rating(message):
-    oy=joriy_oy()
-    stats=[]
-    for uid,m in menedjerlar.items():
-        if m.get("status")!="tasdiqlangan": continue
-        plan=plan_olish(uid,oy)
-        savdo=menejer_oylik_savdosi(uid,oy)
-        foiz=(savdo/plan*100) if plan>0 else 0
-        stats.append((foiz,savdo,plan,m.get("ism","")))
-    stats.sort(key=lambda z:(z[0],z[1]),reverse=True)
-    text=f"🏆 <b>Menejerlar reytingi — {oy}</b>\n\n"
-    for i,(foiz,savdo,plan,name) in enumerate(stats,1):
-        text+=f"{i}. <b>{name}</b> — {foiz:.1f}%\n   📊 ${savdo:,.0f} / ${plan:,.0f}\n"
-    bot.send_message(message.chat.id,text if stats else "Hozircha tasdiqlangan menejer yo'q.",parse_mode="HTML")
-
 @bot.message_handler(func=lambda m: m.text == "🎯 Planlar" and rahbar_mi(m.from_user.id))
 def plans_admin(message):
     kb=types.InlineKeyboardMarkup()
@@ -2773,15 +2738,6 @@ def rahbar_dashboard_matni(oy=None):
 
     return matn
 
-@bot.message_handler(func=lambda m: m.text == "📈 Savdo analitikasi" and rahbar_mi(m.from_user.id))
-def rahbar_dashboard(message):
-    bot.send_message(
-        message.chat.id,
-        rahbar_dashboard_matni(),
-        parse_mode="HTML",
-        reply_markup=rahbar_menu()
-    )
-
 @bot.message_handler(func=lambda m: m.text == "🏆 Menejerlar reytingi" and rahbar_mi(m.from_user.id))
 def rahbar_menejer_reytingi_yangi(message):
     oy = joriy_oy()
@@ -2812,28 +2768,6 @@ def rahbar_menejer_reytingi_yangi(message):
         )
 
     bot.send_message(message.chat.id, matn, parse_mode="HTML", reply_markup=rahbar_menu())
-
-@bot.message_handler(commands=["dashboard"])
-def dashboard_command(message):
-    if not rahbar_mi(message.from_user.id):
-        bot.send_message(message.chat.id, "❌ Bu bo'lim faqat rahbarlar uchun.")
-        return
-    bot.send_message(
-        message.chat.id,
-        rahbar_dashboard_matni(),
-        parse_mode="HTML",
-        reply_markup=rahbar_menu()
-    )
-
-# ============================================================
-# 8-BOSQICH: MENEJER BUYURTMALARI
-# Faqat tasdiqlangan menejerlar buyurtma yaratadi.
-# Buyurtma do'kon + menejer + mahsulot + miqdor bilan saqlanadi.
-# ============================================================
-
-MENEJER_BUYURTMALAR_FAYLI = "menedjer_buyurtmalar.json"
-menejer_buyurtma_holati = {}
-menejer_buyurtma_savat = {}
 
 def menejer_buyurtmalarini_yuklash():
     if not os.path.exists(MENEJER_BUYURTMALAR_FAYLI):
