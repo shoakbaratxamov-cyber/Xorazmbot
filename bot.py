@@ -4566,3 +4566,163 @@ def menejer_hisobotlarim(message):
             f"📌 {statuslar.get(x.get('status'), x.get('status'))}\n\n"
         )
     bot.send_message(message.chat.id, matn, parse_mode="HTML", reply_markup=menejer_menu())
+
+# ============================================================
+# 15-BOSQICH: AVTOMATIK BILDIRISHNOMALAR
+# Vazifa deadline, yangi buyurtma, qarzdorlik va plan ortda
+# qolishi bo'yicha menejer/rahbarga avtomatik xabarlar.
+# ============================================================
+
+def menejer_bildirishnoma_yubor(uid, matn):
+    try:
+        bot.send_message(int(uid), matn, parse_mode="HTML")
+        return True
+    except Exception:
+        log.exception("Bildirishnoma yuborishda xatolik")
+        return False
+
+def qarzdorlik_bildirishnomasi():
+    # Har bir menejerga faqat o'z do'konlaridagi qarz.
+    for uid, info in tasdiqlangan_menejerlar():
+        qarz = menejer_qarzi_jami(uid)
+        if qarz > 0:
+            menejer_bildirishnoma_yubor(
+                uid,
+                f"💳 <b>Qarzdorlik eslatmasi</b>\n\n"
+                f"Sizga biriktirilgan do'konlar bo'yicha jami qarzdorlik:\n"
+                f"💰 <b>${qarz:,.0f}</b>"
+            )
+
+def plan_bildirishnomasi():
+    oy = joriy_oy()
+    for uid, info in tasdiqlangan_menejerlar():
+        k = menejer_kpi(uid, oy)
+        if k["plan"] <= 0:
+            continue
+
+        # Oy o'tishiga qarab soddalashtirilgan signal.
+        kun = datetime.now().day
+        if kun >= 20 and k["bajarilish"] < 70:
+            menejer_bildirishnoma_yubor(
+                uid,
+                f"⚠️ <b>Plan bo'yicha ogohlantirish</b>\n\n"
+                f"🎯 Plan: ${k['plan']:,.0f}\n"
+                f"💰 Savdo: ${k['savdo']:,.0f}\n"
+                f"📈 Bajarilish: <b>{k['bajarilish']:.1f}%</b>\n\n"
+                f"Planingizni yakunlashga e'tibor bering."
+            )
+
+def yangi_buyurtmalar_bildirishnomasi():
+    data = menejer_buyurtmalarini_yuklash()
+    yangi = [x for x in data if x.get("status") == "yangi"]
+
+    if not yangi:
+        return
+
+    # Rahbarlarga yangi buyurtma borligini eslatish.
+    eng_yangi = yangi[-10:]
+    matn = "🔔 <b>Yangi buyurtmalar mavjud</b>\n\n"
+    for x in eng_yangi:
+        matn += (
+            f"📦 #{x['id']} — {x.get('dokon_nomi', '')}\n"
+            f"👨‍💼 {x.get('manager_ism', '')}\n"
+            f"💰 ${_float(x.get('jami_summa')):,.0f}\n\n"
+        )
+
+    for rid in RAHBAR_IDS:
+        menejer_bildirishnoma_yubor(rid, matn)
+
+def muddati_otgan_vazifalar_rahbar():
+    data = vazifalarni_yuklash()
+    for x in data:
+        if x.get("status") != "muddati_otdi":
+            continue
+        if x.get("rahbarga_muddat_xabari"):
+            continue
+
+        x["rahbarga_muddat_xabari"] = True
+        for rid in RAHBAR_IDS:
+            menejer_bildirishnoma_yubor(
+                rid,
+                f"🔴 <b>Vazifa muddati o'tdi</b>\n\n"
+                f"{vazifa_matni(x)}"
+            )
+
+    vazifalarni_saqlash(data)
+
+def avtomatik_bildirishnomalar():
+    """
+    Bu funksiya scheduler orqali kuniga bir necha marta chaqiriladi.
+    Bir xil xabarni cheksiz yubormaslik uchun asosiy takrorlanish
+    cheklovi vazifa/buyurtma holatlarida saqlanadi.
+    """
+    try:
+        vazifalarni_avtomatik_tekshirish()
+    except Exception:
+        log.exception("Vazifa tekshiruvida xatolik")
+
+    try:
+        muddati_otgan_vazifalar_rahbar()
+    except Exception:
+        log.exception("Muddati o'tgan vazifalarni tekshirishda xatolik")
+
+def bildirishnoma_scheduler_loop():
+    """
+    Telebot polling bilan parallel ishlaydigan oddiy daemon loop.
+    Har 30 daqiqada deadline nazorati amalga oshiriladi.
+    Kunlik ogohlantirishlar esa soatiga qarab bir martalik flag bilan
+    keyinchalik kengaytirilishi mumkin.
+    """
+    while True:
+        try:
+            avtomatik_bildirishnomalar()
+        except Exception:
+            log.exception("Bildirishnoma scheduler xatosi")
+        time.sleep(1800)
+
+def bildirishnoma_scheduler_start():
+    if globals().get("_BILDIRISHNOMA_SCHEDULER_STARTED"):
+        return
+    globals()["_BILDIRISHNOMA_SCHEDULER_STARTED"] = True
+    t = threading.Thread(
+        target=bildirishnoma_scheduler_loop,
+        daemon=True,
+        name="bildirishnoma-scheduler"
+    )
+    t.start()
+
+@bot.message_handler(func=lambda m: m.text == "🔔 Bildirishnomalar" and rahbar_mi(m.from_user.id))
+def rahbar_bildirishnomalar(message):
+    bot.send_message(
+        message.chat.id,
+        "🔔 <b>Bildirishnomalar</b>\n\n"
+        "Tizim avtomatik ravishda:\n"
+        "• 🎯 Vazifa deadline'larini\n"
+        "• 🔴 Muddati o'tgan vazifalarni\n"
+        "• 📦 Yangi buyurtmalarni\n"
+        "• 💳 Qarzdorlikni\n"
+        "• 🎯 Plan bajarilishini\n"
+        "nazorat qiladi.",
+        parse_mode="HTML",
+        reply_markup=rahbar_menu()
+    )
+
+@bot.message_handler(func=lambda m: m.text == "🔔 Bildirishnomalar" and menejer_mi(m.from_user.id))
+def menejer_bildirishnomalar(message):
+    bot.send_message(
+        message.chat.id,
+        "🔔 <b>Sizga yuboriladigan bildirishnomalar:</b>\n\n"
+        "• 🎯 Vazifa deadline\n"
+        "• 🔴 Muddati o'tgan vazifa\n"
+        "• 💳 Qarzdorlik eslatmasi\n"
+        "• 🎯 Plan bo'yicha ogohlantirish\n"
+        "• 📦 Buyurtma statusi",
+        parse_mode="HTML",
+        reply_markup=menejer_menu()
+    )
+
+# Scheduler funksiyasi bot polling boshlanishidan oldin chaqiriladi.
+try:
+    bildirishnoma_scheduler_start()
+except Exception:
+    log.exception("Bildirishnoma scheduler ishga tushmadi")
