@@ -3774,3 +3774,150 @@ def dashboard_command_2(message):
     if not rahbar_mi(message.from_user.id):
         return
     bot.send_message(message.chat.id, dashboard_matn(), parse_mode="HTML", reply_markup=rahbar_menu())
+
+# ============================================================
+# 12-BOSQICH: KUNLIK / OYLIK HISOBOTLAR
+# Rahbar uchun tayyor hisobot: savdo, buyurtma, qarz, rasxod,
+# menejerlar va top mahsulotlar.
+# ============================================================
+
+def sana_bugun():
+    return datetime.now().strftime("%Y-%m-%d")
+
+def hisobot_savdo_oraliq(start_date, end_date):
+    rows = []
+    for x in savdolar:
+        sana = str(x.get("sana", ""))[:10]
+        if start_date <= sana <= end_date:
+            rows.append(x)
+    return rows
+
+def hisobot_buyurtma_oraliq(start_date, end_date):
+    data = menejer_buyurtmalarini_yuklash()
+    return [
+        x for x in data
+        if start_date <= str(x.get("sana", ""))[:10] <= end_date
+    ]
+
+def hisobot_rasxod_oraliq(start_date, end_date):
+    return [
+        x for x in rasxodlar
+        if x.get("status") == "tasdiqlangan"
+        and start_date <= str(x.get("sana", ""))[:10] <= end_date
+    ]
+
+def hisobot_qarz_balansi():
+    return dashboard_qarz_jami()
+
+def umumiy_hisobot(start_date, end_date, sarlavha):
+    sales = hisobot_savdo_oraliq(start_date, end_date)
+    orders = hisobot_buyurtma_oraliq(start_date, end_date)
+    expenses = hisobot_rasxod_oraliq(start_date, end_date)
+
+    savdo = sum(_float(x.get("total", x.get("summa", 0))) for x in sales)
+    qty = sum(int(_float(x.get("qty", x.get("son", 0)))) for x in sales)
+    rasxod = sum(_float(x.get("summa", 0)) for x in expenses)
+
+    yangi = sum(1 for x in orders if x.get("status") == "yangi")
+    tasdiq = sum(1 for x in orders if x.get("status") == "tasdiqlandi")
+    tayyor = sum(1 for x in orders if x.get("status") == "tayyorlanmoqda")
+    yolda = sum(1 for x in orders if x.get("status") == "yolda")
+    yetkazildi = sum(1 for x in orders if x.get("status") == "yetkazildi")
+    bekor = sum(1 for x in orders if x.get("status") == "bekor_qilindi")
+
+    matn = (
+        f"📑 <b>{sarlavha}</b>\n"
+        f"📅 {start_date} → {end_date}\n\n"
+        f"💰 <b>Savdo:</b> ${savdo:,.0f}\n"
+        f"📦 <b>Sotilgan:</b> {qty:,} dona\n"
+        f"🧾 <b>Savdo operatsiyasi:</b> {len(sales)} ta\n"
+        f"💸 <b>Tasdiqlangan rasxod:</b> ${rasxod:,.0f}\n"
+        f"📈 <b>Savdo − rasxod:</b> ${savdo - rasxod:,.0f}\n\n"
+        f"🛒 <b>Buyurtmalar:</b> {len(orders)} ta\n"
+        f"   🕐 Yangi: {yangi}\n"
+        f"   ✅ Tasdiqlangan: {tasdiq}\n"
+        f"   📦 Tayyorlanmoqda: {tayyor}\n"
+        f"   🚚 Yo'lda: {yolda}\n"
+        f"   🏁 Yetkazilgan: {yetkazildi}\n"
+        f"   ❌ Bekor qilingan: {bekor}\n\n"
+        f"💳 <b>Jami qarzdorlik:</b> ${hisobot_qarz_balansi():,.0f}\n"
+    )
+
+    # Menejerlar kesimi
+    if sales:
+        matn += "\n🏆 <b>MENEJERLAR</b>\n"
+        groups = dashboard_guruh(
+            sales,
+            lambda r: dashboard_menejer_nomi(r.get("manager_id"))
+        )
+        for i, (name, total) in enumerate(groups[:10], 1):
+            matn += f"{i}. {name} — ${total:,.0f}\n"
+
+        # Top mahsulotlar
+        products = dashboard_guruh(
+            sales,
+            lambda r: r.get("model", "Noma'lum")
+        )
+        matn += "\n📦 <b>TOP MAHSULOTLAR</b>\n"
+        for i, (name, total) in enumerate(products[:10], 1):
+            matn += f"{i}. {name} — ${total:,.0f}\n"
+
+    return matn
+
+def rahbar_hisobot_kb():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("📅 Bugun", callback_data="report:today"),
+        types.InlineKeyboardButton("📆 Kecha", callback_data="report:yesterday")
+    )
+    kb.add(types.InlineKeyboardButton("🗓 Shu oy", callback_data="report:month"))
+    return kb
+
+@bot.message_handler(func=lambda m: m.text == "📑 Hisobotlar" and rahbar_mi(m.from_user.id))
+def rahbar_hisobotlar_menu(message):
+    bot.send_message(
+        message.chat.id,
+        "📑 <b>Hisobotlar</b>\n\nKerakli davrni tanlang:",
+        parse_mode="HTML",
+        reply_markup=rahbar_hisobot_kb()
+    )
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("report:"))
+def rahbar_hisobot_callback(call):
+    bot.answer_callback_query(call.id)
+    if not rahbar_mi(call.from_user.id):
+        return
+
+    today = datetime.now().date()
+    tur = call.data.split(":", 1)[1]
+
+    if tur == "today":
+        start = end = today
+        title = "BUGUNGI HISOBOT"
+    elif tur == "yesterday":
+        start = end = today - timedelta(days=1)
+        title = "KECHAGI HISOBOT"
+    else:
+        start = today.replace(day=1)
+        end = today
+        title = "SHU OY HISOBOTI"
+
+    matn = umumiy_hisobot(
+        start.strftime("%Y-%m-%d"),
+        end.strftime("%Y-%m-%d"),
+        title
+    )
+    bot.send_message(call.message.chat.id, matn, parse_mode="HTML")
+
+@bot.message_handler(commands=["hisobot"])
+def hisobot_command(message):
+    if not rahbar_mi(message.from_user.id):
+        return
+    today = datetime.now().date()
+    start = today.strftime("%Y-%m-%d")
+    bot.send_message(
+        message.chat.id,
+        umumiy_hisobot(start, start, "BUGUNGI HISOBOT"),
+        parse_mode="HTML",
+        reply_markup=rahbar_menu()
+    )
