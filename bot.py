@@ -3921,3 +3921,375 @@ def hisobot_command(message):
         parse_mode="HTML",
         reply_markup=rahbar_menu()
     )
+
+# ============================================================
+# 13-BOSQICH: VAZIFALAR + DEADLINE + ESLATMA
+# Rahbar menejerga vazifa beradi. Menejer faqat o'z vazifalarini
+# ko'radi. Deadline yaqinlashganda bot eslatma yuboradi.
+# ============================================================
+
+VAZIFALAR_FAYLI = "vazifalar.json"
+vazifa_holati = {}
+
+def vazifalarni_yuklash():
+    if not os.path.exists(VAZIFALAR_FAYLI):
+        return []
+    try:
+        with open(VAZIFALAR_FAYLI, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        log.exception("Vazifalarni yuklashda xatolik")
+        return []
+
+def vazifalarni_saqlash(data):
+    tmp = VAZIFALAR_FAYLI + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, VAZIFALAR_FAYLI)
+
+def yangi_vazifa_id():
+    data = vazifalarni_yuklash()
+    mx = 0
+    for x in data:
+        try:
+            mx = max(mx, int(x.get("id", 0)))
+        except Exception:
+            pass
+    return mx + 1
+
+def vazifa_status(status):
+    return {
+        "yangi": "🕐 Yangi",
+        "jarayonda": "🔄 Jarayonda",
+        "bajarildi": "✅ Bajarildi",
+        "muddati_otdi": "🔴 Muddati o'tdi",
+        "bekor_qilingan": "❌ Bekor qilingan",
+    }.get(status, status)
+
+def vazifa_matni(x):
+    deadline = x.get("deadline", "Belgilanmagan")
+    return (
+        f"🎯 <b>Vazifa #{x['id']}</b>\n\n"
+        f"📝 {x.get('matn', '')}\n"
+        f"👨‍💼 Menejer: {x.get('menejer_ism', '')}\n"
+        f"📅 Deadline: {deadline}\n"
+        f"📌 Status: {vazifa_status(x.get('status'))}"
+    )
+
+@bot.message_handler(func=lambda m: m.text == "🎯 Vazifalar" and rahbar_mi(m.from_user.id))
+def rahbar_vazifalar_menu(message):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("➕ Vazifa berish", "📋 Barcha vazifalar")
+    kb.add("🏠 Bosh menyu")
+    bot.send_message(
+        message.chat.id,
+        "🎯 <b>Vazifalar boshqaruvi</b>",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+@bot.message_handler(func=lambda m: m.text == "➕ Vazifa berish" and rahbar_mi(m.from_user.id))
+def rahbar_vazifa_menejer_tanlash(message):
+    rows = tasdiqlangan_menejerlar()
+    if not rows:
+        bot.send_message(message.chat.id, "Tasdiqlangan menejerlar yo'q.")
+        return
+
+    kb = types.InlineKeyboardMarkup()
+    for uid, info in rows:
+        kb.add(types.InlineKeyboardButton(
+            f"👨‍💼 {info.get('ism', 'Nomsiz')}",
+            callback_data=f"taskmgr:{uid}"
+        ))
+    bot.send_message(message.chat.id, "Vazifa qaysi menejerga?", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("taskmgr:"))
+def rahbar_vazifa_menejer_callback(call):
+    bot.answer_callback_query(call.id)
+    if not rahbar_mi(call.from_user.id):
+        return
+
+    uid = call.data.split(":", 1)[1]
+    if not menejer_mi(uid):
+        bot.send_message(call.message.chat.id, "❌ Menejer topilmadi.")
+        return
+
+    vazifa_holati[call.from_user.id] = {
+        "bosqich": "matn",
+        "menejer_id": uid
+    }
+    bot.send_message(
+        call.message.chat.id,
+        "📝 Vazifani yozing.\nMasalan: 20 ta do'kon bilan bog'lanish"
+    )
+
+@bot.message_handler(func=lambda m: m.from_user.id in vazifa_holati)
+def rahbar_vazifa_kiritish(message):
+    uid = message.from_user.id
+    state = vazifa_holati.get(uid)
+    if not state:
+        return
+
+    if state.get("bosqich") == "matn":
+        state["matn"] = (message.text or "").strip()
+        if not state["matn"]:
+            bot.send_message(message.chat.id, "❌ Vazifa matni bo'sh bo'lmasin.")
+            return
+        state["bosqich"] = "deadline"
+        bot.send_message(
+            message.chat.id,
+            "📅 Deadline kiriting:\n"
+            "Format: YYYY-MM-DD HH:MM\n"
+            "Masalan: 2026-09-15 18:00"
+        )
+        return
+
+    if state.get("bosqich") == "deadline":
+        deadline = (message.text or "").strip()
+        try:
+            dt = datetime.strptime(deadline, "%Y-%m-%d %H:%M")
+        except ValueError:
+            bot.send_message(
+                message.chat.id,
+                "❌ Format noto'g'ri.\n"
+                "Masalan: 2026-09-15 18:00"
+            )
+            return
+
+        if dt <= datetime.now():
+            bot.send_message(message.chat.id, "❌ Deadline kelajakdagi vaqt bo'lishi kerak.")
+            return
+
+        menejer_id = state["menejer_id"]
+        info = menejer_ol(menejer_id)
+        task = {
+            "id": yangi_vazifa_id(),
+            "menejer_id": int(menejer_id),
+            "menejer_ism": (info or {}).get("ism", ""),
+            "matn": state["matn"],
+            "deadline": dt.strftime("%Y-%m-%d %H:%M"),
+            "bergan_rahbar_id": uid,
+            "berilgan_vaqt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "yangi",
+            "eslatma_1soat": False,
+            "eslatma_24soat": False,
+        }
+
+        data = vazifalarni_yuklash()
+        data.append(task)
+        vazifalarni_saqlash(data)
+        vazifa_holati.pop(uid, None)
+
+        bot.send_message(
+            message.chat.id,
+            "✅ Vazifa yaratildi va menejerga yuborildi.",
+            reply_markup=rahbar_menu()
+        )
+
+        try:
+            kb = types.InlineKeyboardMarkup()
+            kb.add(
+                types.InlineKeyboardButton("🔄 Jarayonda", callback_data=f"taskstart:{task['id']}"),
+                types.InlineKeyboardButton("✅ Bajarildi", callback_data=f"taskdone:{task['id']}")
+            )
+            bot.send_message(
+                int(menejer_id),
+                vazifa_matni(task),
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+        except Exception:
+            log.exception("Menejerga vazifa yuborishda xatolik")
+
+@bot.message_handler(func=lambda m: m.text == "🎯 Mening vazifalarim" and menejer_mi(m.from_user.id))
+def menejer_vazifalarim(message):
+    data = vazifalarni_yuklash()
+    mine = [x for x in data if str(x.get("menejer_id")) == str(message.from_user.id)]
+
+    if not mine:
+        bot.send_message(message.chat.id, "🎯 Sizga berilgan vazifalar yo'q.")
+        return
+
+    for x in reversed(mine[-30:]):
+        kb = types.InlineKeyboardMarkup()
+        if x.get("status") == "yangi":
+            kb.add(types.InlineKeyboardButton(
+                "🔄 Jarayonda", callback_data=f"taskstart:{x['id']}"
+            ))
+        if x.get("status") in {"yangi", "jarayonda"}:
+            kb.add(types.InlineKeyboardButton(
+                "✅ Bajarildi", callback_data=f"taskdone:{x['id']}"
+            ))
+        bot.send_message(
+            message.chat.id,
+            vazifa_matni(x),
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+
+def vazifa_status_ozgartir(uid, task_id, status):
+    data = vazifalarni_yuklash()
+    for x in data:
+        if int(x.get("id", 0)) != int(task_id):
+            continue
+
+        if str(x.get("menejer_id")) != str(uid) and not rahbar_mi(uid):
+            return None, False, "Bu vazifa sizga tegishli emas."
+
+        if x.get("status") == "bajarildi":
+            return x, False, "Vazifa allaqachon bajarilgan."
+
+        x["status"] = status
+        x["status_vaqti"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if status == "bajarildi":
+            x["bajarilgan_vaqt"] = x["status_vaqti"]
+
+        vazifalarni_saqlash(data)
+        return x, True, None
+
+    return None, False, "Vazifa topilmadi."
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("taskstart:"))
+def vazifa_jarayonda_callback(call):
+    bot.answer_callback_query(call.id)
+    uid = call.from_user.id
+    task_id = int(call.data.split(":", 1)[1])
+    x, ok, error = vazifa_status_ozgartir(uid, task_id, "jarayonda")
+    if not x:
+        bot.send_message(call.message.chat.id, f"❌ {error}")
+        return
+    if not ok:
+        bot.send_message(call.message.chat.id, f"ℹ️ {error}")
+        return
+
+    try:
+        bot.edit_message_text(
+            vazifa_matni(x),
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("taskdone:"))
+def vazifa_bajarildi_callback(call):
+    bot.answer_callback_query(call.id)
+    uid = call.from_user.id
+    task_id = int(call.data.split(":", 1)[1])
+    x, ok, error = vazifa_status_ozgartir(uid, task_id, "bajarildi")
+    if not x:
+        bot.send_message(call.message.chat.id, f"❌ {error}")
+        return
+    if not ok:
+        bot.send_message(call.message.chat.id, f"ℹ️ {error}")
+        return
+
+    try:
+        bot.edit_message_text(
+            vazifa_matni(x),
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+    # Vazifani bergan rahbarga bajarilganligi haqida xabar.
+    try:
+        bot.send_message(
+            int(x["bergan_rahbar_id"]),
+            f"✅ Menejer vazifani bajardi!\n\n{vazifa_matni(x)}",
+            parse_mode="HTML"
+        )
+    except Exception:
+        log.exception("Rahbarga vazifa natijasini yuborishda xatolik")
+
+@bot.message_handler(func=lambda m: m.text == "📋 Barcha vazifalar" and rahbar_mi(m.from_user.id))
+def rahbar_barcha_vazifalar(message):
+    data = vazifalarni_yuklash()
+    if not data:
+        bot.send_message(message.chat.id, "Vazifalar yo'q.")
+        return
+
+    for x in reversed(data[-50:]):
+        bot.send_message(
+            message.chat.id,
+            vazifa_matni(x),
+            parse_mode="HTML"
+        )
+
+@bot.message_handler(commands=["vazifalar"])
+def vazifalar_command(message):
+    if rahbar_mi(message.from_user.id):
+        bot.send_message(
+            message.chat.id,
+            "🎯 Vazifalar bo'limini menyudan oching.",
+            reply_markup=rahbar_menu()
+        )
+    elif menejer_mi(message.from_user.id):
+        menejer_vazifalarim(message)
+
+def vazifalarni_avtomatik_tekshirish():
+    """
+    Bot ishga tushganda va keyinchalik davriy chaqirilishi mumkin.
+    24 soat va 1 soat qolganida bir martadan eslatma yuboradi.
+    Muddati o'tgan vazifa avtomatik 'muddati_otdi' bo'ladi.
+    """
+    data = vazifalarni_yuklash()
+    now = datetime.now()
+    ozgardi = False
+
+    for x in data:
+        if x.get("status") == "bajarildi" or x.get("status") == "bekor_qilingan":
+            continue
+
+        try:
+            deadline = datetime.strptime(x["deadline"], "%Y-%m-%d %H:%M")
+        except Exception:
+            continue
+
+        farq = deadline - now
+
+        if farq.total_seconds() <= 0:
+            if x.get("status") != "muddati_otdi":
+                x["status"] = "muddati_otdi"
+                x["muddat_otgan_vaqt"] = now.strftime("%Y-%m-%d %H:%M:%S")
+                ozgardi = True
+                try:
+                    bot.send_message(
+                        int(x["menejer_id"]),
+                        f"🔴 <b>Vazifa muddati o'tdi!</b>\n\n{vazifa_matni(x)}",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+            continue
+
+        if farq.total_seconds() <= 3600 and not x.get("eslatma_1soat"):
+            x["eslatma_1soat"] = True
+            ozgardi = True
+            try:
+                bot.send_message(
+                    int(x["menejer_id"]),
+                    f"⏰ <b>1 soat qoldi!</b>\n\n{vazifa_matni(x)}",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+        elif farq.total_seconds() <= 86400 and not x.get("eslatma_24soat"):
+            x["eslatma_24soat"] = True
+            ozgardi = True
+            try:
+                bot.send_message(
+                    int(x["menejer_id"]),
+                    f"🔔 <b>24 soat qoldi!</b>\n\n{vazifa_matni(x)}",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    if ozgardi:
+        vazifalarni_saqlash(data)
