@@ -502,462 +502,530 @@ def orqaga_menyu_yaratish():
     return menyu
 
 
-# ==========================================
-# RO'YXATDAN O'TISH (Do'kon nomi + Ism + Telefon, so'ng ADMIN TASDIG'I kerak)
-# ==========================================
-FOYDALANUVCHILAR_FAYLI = "foydalanuvchilar.json"
-royxatdan_otganlar = {}      # {"user_id": {"dokon_nomi":..., "ism":..., "telefon":..., "viloyat":..., "tuman":..., "sana":...}} — TASDIQLANGAN
-royxat_holati = {}           # {chat_id: {"bosqich": "dokon_nomi"/"ism"/"telefon"/"viloyat"/"tuman", ...}} — to'ldirish jarayoni
-kutilayotgan_royxatlar = {}  # {user_id: {"chat_id":..., "dokon_nomi":..., "ism":..., "telefon":..., "viloyat":..., "tuman":..., "sana":...}} — ADMIN TASDIG'INI KUTMOQDA
 
-VILOYATLAR = [
-    "Andijon", "Buxoro", "Farg'ona", "Jizzax", "Xorazm",
-    "Namangan", "Navoiy", "Qashqadaryo", "Qoraqalpog'iston",
-    "Samarqand", "Sirdaryo", "Surxondaryo", "Toshkent shahri", "Toshkent viloyati",
-]
+# ============================================================
+# FAQAT ICHKI BOT: MENEJER + RAHBAR
+# Mijozlar uchun registratsiya/katalog/buyurtma funksiyasi yo'q.
+# ============================================================
 
+MENEDJERLAR_FAYLI = "menedjerlar.json"
+DOKONLAR_FAYLI = "dokonlar.json"
+SAVDOLAR_FAYLI = "savdolar.json"
 
-def foydalanuvchilarni_yuklash():
-    global royxatdan_otganlar
+menedjer_holati = {}
+dokon_holati = {}
+savdo_holati = {}
+
+def json_yukla(fayl, default):
     try:
-        if os.path.exists(FOYDALANUVCHILAR_FAYLI):
-            with open(FOYDALANUVCHILAR_FAYLI, "r", encoding="utf-8") as f:
-                royxatdan_otganlar = json.load(f)
-            log.info("Ro'yxatdan o'tgan foydalanuvchilar yuklandi: %s ta.", len(royxatdan_otganlar))
+        if os.path.exists(fayl):
+            with open(fayl, "r", encoding="utf-8") as f:
+                return json.load(f)
     except Exception:
-        log.exception("Foydalanuvchilar ro'yxatini yuklashda xatolik")
-        royxatdan_otganlar = {}
+        log.exception("%s o'qishda xatolik", fayl)
+    return default
 
-
-def foydalanuvchini_saqlash(user_id, dokon_nomi, ism, telefon, viloyat, tuman):
-    royxatdan_otganlar[str(user_id)] = {
-        "dokon_nomi": dokon_nomi,
-        "ism": ism,
-        "telefon": telefon,
-        "viloyat": viloyat,
-        "tuman": tuman,
-        "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
+def json_saqlash(fayl, data):
     try:
-        vaqtinchalik = FOYDALANUVCHILAR_FAYLI + ".tmp"
-        with open(vaqtinchalik, "w", encoding="utf-8") as f:
-            json.dump(royxatdan_otganlar, f, ensure_ascii=False, indent=2)
-        os.replace(vaqtinchalik, FOYDALANUVCHILAR_FAYLI)
+        tmp = fayl + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, fayl)
+        return True
     except Exception:
-        log.exception("Foydalanuvchini saqlashda xatolik")
+        log.exception("%s saqlashda xatolik", fayl)
+        return False
 
+menedjerlar = json_yukla(MENEDJERLAR_FAYLI, {})
+dokonlar = json_yukla(DOKONLAR_FAYLI, {})
+savdolar = json_yukla(SAVDOLAR_FAYLI, [])
 
-def royxatdan_otganmi(user_id):
-    """Foydalanuvchi ADMIN TOMONIDAN TASDIQLANGAN ro'yxatda bormi (faqat shundagina botdan foydalana oladi)."""
-    return str(user_id) in royxatdan_otganlar
+# Eski holat saqlash funksiyasi bilan moslik uchun (mijoz registratsiyasi ishlatilmaydi)
+kutilayotgan_royxatlar = {}
 
+def menejer_ol(user_id):
+    return menedjerlar.get(str(user_id))
 
-def tasdiq_kutayotganmi(user_id):
-    return user_id in kutilayotgan_royxatlar
+def menejer_tasdiqlangan(user_id):
+    m = menejer_ol(user_id)
+    return bool(m and m.get("status") == "tasdiqlangan")
 
+def rahbar_mi(user_id):
+    # Hozircha ADMIN_IDS rahbar hisoblanadi.
+    # Keyin alohida Rahbarlar ro'yxatiga o'tkazamiz.
+    return admin_mi(user_id)
 
-def royxatdan_otish_klaviaturasi():
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    keyboard.add(types.KeyboardButton("📞 Raqamni ulashish", request_contact=True))
-    return keyboard
+def menejer_ruxsat(user_id):
+    return admin_mi(user_id) or menejer_tasdiqlangan(user_id)
 
+def menejer_menu():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("🏪 Mening do'konlarim"))
+    kb.add(types.KeyboardButton("🛒 Savdo kiritish"), types.KeyboardButton("📊 Mening savdom"))
+    kb.add(types.KeyboardButton("🎯 Mening planim"), types.KeyboardButton("💰 Qarzdorlik"))
+    kb.add(types.KeyboardButton("💸 Rasxod"), types.KeyboardButton("📦 Buyurtmalar"))
+    kb.add(types.KeyboardButton("👤 Profilim"))
+    return kb
 
-def viloyat_klaviaturasi():
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    qatorlar = [VILOYATLAR[i:i + 2] for i in range(0, len(VILOYATLAR), 2)]
-    for qator in qatorlar:
-        keyboard.add(*[types.KeyboardButton(v) for v in qator])
-    return keyboard
+def rahbar_menu():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("👨‍💼 Menejerlar"), types.KeyboardButton("🏪 Do'konlar"))
+    kb.add(types.KeyboardButton("📊 Umumiy savdo"), types.KeyboardButton("🏆 Menejerlar reytingi"))
+    kb.add(types.KeyboardButton("🎯 Planlar"), types.KeyboardButton("💰 Qarzdorlik"))
+    kb.add(types.KeyboardButton("💸 Rasxodlar"))
+    kb.add(types.KeyboardButton("📈 Savdo analitikasi"))
+    kb.add(types.KeyboardButton("📷 Mahsulot rasmi"), types.KeyboardButton("🎉 Aksiya qo'shish"))
+    kb.add(types.KeyboardButton("🔄 Ombor sonini yangilash"))
+    return kb
 
+def menejer_royxatdan_otishni_boshlash(chat_id):
+    uid = chat_id
+    mavjud = menejer_ol(uid)
+    if mavjud:
+        status = mavjud.get("status")
+        if status == "tasdiqlangan":
+            bot.send_message(chat_id, "✅ Sizning menejer profilingiz tasdiqlangan.", reply_markup=menejer_menu())
+        elif status == "kutilmoqda":
+            bot.send_message(chat_id, "⏳ Arizangiz admin tasdig'ini kutmoqda.")
+        else:
+            menedjer_holati[uid] = {"bosqich": "ism"}
+            bot.send_message(chat_id, "Qayta ariza uchun 👤 Ism-familiyangizni kiriting:",
+                             reply_markup=types.ReplyKeyboardRemove())
+        return
+    menedjer_holati[uid] = {"bosqich": "ism"}
+    bot.send_message(chat_id,
+        "👨‍💼 Menejer sifatida ro'yxatdan o'tish.\n\n"
+        "👤 Ism-familiyangizni kiriting:",
+        reply_markup=types.ReplyKeyboardRemove())
 
-def royxatdan_otishni_boshlash(chat_id):
-    royxat_holati[chat_id] = {"bosqich": "dokon_nomi"}
-    bot.send_message(
-        chat_id,
-        "👋 Assalomu alaykum! Xorazm baza savdo botiga xush kelibsiz.\n\n"
-        "Botdan foydalanishdan oldin ro'yxatdan o'tishingiz kerak. "
-        "Ma'lumotlaringiz admin tomonidan tasdiqlangandan keyin botdan foydalana olasiz.\n\n"
-        "🏪 Do'kon nomini kiriting:",
-        reply_markup=types.ReplyKeyboardRemove()
+def manager_approval_kb(uid):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"men_ok:{uid}"),
+        types.InlineKeyboardButton("❌ Rad etish", callback_data=f"men_rad:{uid}")
     )
+    return kb
 
+@bot.message_handler(commands=["manager", "menejer"])
+def manager_command(message):
+    menejer_royxatdan_otishni_boshlash(message.chat.id)
 
-def royxat_tasdiqlash_klaviaturasi(user_id):
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(
-        types.InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"royxat_tasdiq:{user_id}"),
-        types.InlineKeyboardButton("❌ Rad etish", callback_data=f"royxat_rad:{user_id}"),
-    )
-    return keyboard
+@bot.message_handler(func=lambda m: m.text == "👨‍💼 Menejer")
+def manager_button(message):
+    menejer_royxatdan_otishni_boshlash(message.chat.id)
 
-
-@bot.message_handler(content_types=['text', 'contact'], func=lambda message: not admin_mi(message.from_user.id) and not royxatdan_otganmi(message.from_user.id))
-def royxatdan_otish_boshqaruvchisi(message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Ariza allaqachon yuborilgan, admin javobini kutmoqda — qayta ro'yxatdan otishni boshlamaymiz
-    if tasdiq_kutayotganmi(user_id):
-        bot.send_message(chat_id, "⏳ Arizangiz hali admin tomonidan ko'rib chiqilmoqda. Iltimos, biroz kuting.")
+@bot.message_handler(content_types=["text", "contact"],
+                     func=lambda m: m.from_user.id in menedjer_holati)
+def manager_registration(message):
+    uid = message.from_user.id
+    state = menedjer_holati.get(uid)
+    if not state:
         return
+    text = (message.text or "").strip()
 
-    holat = royxat_holati.get(chat_id)
-
-    # Foydalanuvchi hali ro'yxatdan o'tish jarayonini boshlamagan bo'lsa (masalan /start yozgan)
-    if holat is None:
-        royxatdan_otishni_boshlash(chat_id)
-        return
-
-    if holat["bosqich"] == "dokon_nomi":
-        dokon_nomi = (message.text or "").strip()
-        if not dokon_nomi or dokon_nomi.startswith("/") or len(dokon_nomi) < 2:
-            bot.send_message(chat_id, "Iltimos, do'kon nomini to'g'ri kiriting:")
+    if state["bosqich"] == "ism":
+        if len(text) < 2 or text.startswith("/"):
+            bot.send_message(message.chat.id, "Iltimos, ism-familiyangizni to'g'ri kiriting.")
             return
-        holat["dokon_nomi"] = dokon_nomi
-        holat["bosqich"] = "ism"
-        bot.send_message(chat_id, f"Rahmat!\n\n👤 Do'kon egasining ismini kiriting:")
+        state["ism"] = text
+        state["bosqich"] = "telefon"
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+        kb.add(types.KeyboardButton("📱 Telefon raqamni yuborish", request_contact=True))
+        bot.send_message(message.chat.id, "📱 Telefon raqamingizni yuboring:", reply_markup=kb)
         return
 
-    if holat["bosqich"] == "ism":
-        ism = (message.text or "").strip()
-        if not ism or ism.startswith("/") or len(ism) < 2:
-            bot.send_message(chat_id, "Iltimos, to'g'ri ismingizni kiriting:")
-            return
-        holat["ism"] = ism
-        holat["bosqich"] = "telefon"
-        bot.send_message(
-            chat_id,
-            f"Rahmat, {ism}!\n\n"
-            f"📞 Endi telefon raqamingizni yuboring — pastdagi tugmani bosing "
-            f"yoki qo'lda yozing (masalan: +998901234567):",
-            reply_markup=royxatdan_otish_klaviaturasi()
-        )
-        return
-
-    if holat["bosqich"] == "telefon":
-        telefon = None
+    if state["bosqich"] == "telefon":
+        telefon = ""
         if message.content_type == "contact" and message.contact:
             telefon = message.contact.phone_number
-        elif message.text:
-            telefon = message.text.strip()
-
-        telefon_tozalangan = (telefon or "").replace(" ", "").replace("-", "")
-        if not telefon_tozalangan or not re.match(r"^\+?\d{9,15}$", telefon_tozalangan):
-            bot.send_message(
-                chat_id,
-                "Telefon raqami noto'g'ri ko'rinyapti. Qaytadan urinib ko'ring "
-                "(masalan: +998901234567) yoki tugmani bosing:",
-                reply_markup=royxatdan_otish_klaviaturasi()
-            )
+        else:
+            telefon = text
+        telefon = telefon.replace(" ", "").replace("-", "")
+        if not re.match(r"^\+?\d{9,15}$", telefon):
+            bot.send_message(message.chat.id, "Telefon raqami noto'g'ri. Masalan: +998901234567")
             return
 
-        holat["telefon"] = telefon_tozalangan
-        holat["bosqich"] = "viloyat"
-        bot.send_message(
-            chat_id,
-            "🗺 Endi viloyatingizni tanlang:",
-            reply_markup=viloyat_klaviaturasi()
-        )
-        return
-
-    if holat["bosqich"] == "viloyat":
-        viloyat = (message.text or "").strip()
-        if viloyat not in VILOYATLAR:
-            bot.send_message(
-                chat_id,
-                "Iltimos, pastdagi tugmalardan birini tanlang:",
-                reply_markup=viloyat_klaviaturasi()
-            )
-            return
-        holat["viloyat"] = viloyat
-        holat["bosqich"] = "tuman"
-        bot.send_message(
-            chat_id,
-            "🏘 Endi tumaningizni (yoki shahar/mahallangizni) kiriting:",
-            reply_markup=types.ReplyKeyboardRemove()
-        )
-        return
-
-    if holat["bosqich"] == "tuman":
-        tuman = (message.text or "").strip()
-        if not tuman or tuman.startswith("/") or len(tuman) < 2:
-            bot.send_message(chat_id, "Iltimos, tuman nomini to'g'ri kiriting:")
-            return
-        holat["tuman"] = tuman
-
-        dokon_nomi = holat["dokon_nomi"]
-        ism = holat["ism"]
-        telefon_tozalangan = holat["telefon"]
-        viloyat = holat["viloyat"]
-
-        # Ariza admin tasdig'iga yuboriladi — hali royxatdan_otganlar'ga qo'shilmaydi
-        kutilayotgan_royxatlar[user_id] = {
-            "chat_id": chat_id,
-            "dokon_nomi": dokon_nomi,
-            "ism": ism,
-            "telefon": telefon_tozalangan,
-            "viloyat": viloyat,
-            "tuman": tuman,
-            "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        menedjerlar[str(uid)] = {
+            "telegram_id": uid,
+            "username": message.from_user.username or "",
+            "ism": state["ism"],
+            "telefon": telefon,
+            "status": "kutilmoqda",
+            "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        royxat_holati.pop(chat_id, None)
-        holatni_saqlash()
-        log.info(
-            "Yangi royxat arizasi: dokon=%s ism=%s tel=%s viloyat=%s tuman=%s user_id=%s — admin tasdigini kutmoqda.",
-            dokon_nomi, ism, telefon_tozalangan, viloyat, tuman, user_id,
-        )
+        json_saqlash(MENEDJERLAR_FAYLI, menedjerlar)
+        menedjer_holati.pop(uid, None)
 
-        bot.send_message(
-            chat_id,
-            f"✅ Arizangiz qabul qilindi!\n\n"
-            f"🏪 Do'kon: {dokon_nomi}\n"
-            f"👤 Ism: {ism}\n"
-            f"📞 Telefon: {telefon_tozalangan}\n"
-            f"🗺 Viloyat: {viloyat}\n"
-            f"🏘 Tuman: {tuman}\n\n"
-            f"⏳ Admin tasdiqlagandan so'ng botdan foydalana olasiz. Iltimos, kuting.",
-            reply_markup=types.ReplyKeyboardRemove()
-        )
+        bot.send_message(message.chat.id,
+            "✅ Menejerlik arizangiz yuborildi.\n\n"
+            "⏳ Admin tasdiqlashini kuting.",
+            reply_markup=types.ReplyKeyboardRemove())
 
-        try:
-            bot.send_message(
-                ZAKAZ_GRUPPA_ID,
-                f"🆕 Yangi ro'yxatdan o'tish arizasi — tasdiq kutilmoqda\n\n"
-                f"🏪 Do'kon: {dokon_nomi}\n"
-                f"👤 Ism: {ism}\n"
-                f"📞 Telefon: {telefon_tozalangan}\n"
-                f"🗺 Viloyat: {viloyat}\n"
-                f"🏘 Tuman: {tuman}\n"
-                f"🆔 {user_id}",
-                reply_markup=royxat_tasdiqlash_klaviaturasi(user_id)
-            )
-        except Exception:
-            log.exception("Yangi royxat arizasi haqida guruhga xabar yuborishda xatolik")
+        for admin_id in ADMIN_IDLAR:
+            try:
+                bot.send_message(admin_id,
+                    f"🆕 YANGI MENEJER ARIZASI\n\n"
+                    f"👤 {state['ism']}\n"
+                    f"📱 {telefon}\n"
+                    f"🆔 {uid}\n"
+                    f"👤 @{message.from_user.username or 'username yo‘q'}",
+                    reply_markup=manager_approval_kb(uid))
+            except Exception:
+                log.exception("Admin %s ga menejer arizasini yuborishda xato", admin_id)
         return
 
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("royxat_tasdiq:"))
-def royxat_tasdiqlash(call):
-    bot.answer_callback_query(call.id)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("men_ok:"))
+def manager_approve(call):
     if not admin_mi(call.from_user.id):
+        bot.answer_callback_query(call.id, "Ruxsat yo'q", show_alert=True)
         return
-
-    user_id = int(call.data.split("royxat_tasdiq:", 1)[1])
-    ariza = kutilayotgan_royxatlar.pop(user_id, None)
-    holatni_saqlash()
-
-    if not ariza:
-        bot.send_message(call.message.chat.id, "Bu ariza topilmadi — avval tasdiqlangan yoki rad etilgan bo'lishi mumkin.")
+    uid = int(call.data.split(":", 1)[1])
+    m = menedjer_ol(uid)
+    if not m:
+        bot.answer_callback_query(call.id, "Menejer topilmadi.", show_alert=True)
         return
-
-    foydalanuvchini_saqlash(
-        user_id, ariza["dokon_nomi"], ariza["ism"], ariza["telefon"],
-        ariza.get("viloyat", ""), ariza.get("tuman", ""),
-    )
-    log.info("Ariza tasdiqlandi: %s (user_id=%s) admin=%s tomonidan.", ariza["ism"], user_id, call.from_user.id)
-
+    m["status"] = "tasdiqlangan"
+    m["tasdiqlagan_admin"] = call.from_user.id
+    m["tasdiqlangan_sana"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    json_saqlash(MENEDJERLAR_FAYLI, menedjerlar)
+    bot.answer_callback_query(call.id, "Tasdiqlandi")
     try:
-        bot.edit_message_text(
-            call.message.text + f"\n\n✅ TASDIQLANDI (admin: {call.from_user.first_name})",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-        )
+        bot.edit_message_text(call.message.text + "\n\n✅ TASDIQLANDI",
+                              call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    try:
+        bot.send_message(uid,
+            "🎉 Tabriklaymiz! Menejerlik profilingiz tasdiqlandi.\n\n"
+            "Endi /start orqali menejer panelidan foydalanishingiz mumkin.",
+            reply_markup=menejer_menu())
     except Exception:
         pass
 
-    bot.send_message(
-        ariza["chat_id"],
-        f"✅ Tabriklaymiz, {ariza['ism']}! Arizangiz tasdiqlandi.\n\n"
-        f"Endi botdan to'liq foydalanishingiz mumkin.",
-        reply_markup=bosh_menyu_yaratish(user_id)
-    )
-    kategoriyalarni_korsatish(ariza["chat_id"])
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("royxat_rad:"))
-def royxat_rad_etish(call):
-    bot.answer_callback_query(call.id)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("men_rad:"))
+def manager_reject(call):
     if not admin_mi(call.from_user.id):
+        bot.answer_callback_query(call.id, "Ruxsat yo'q", show_alert=True)
         return
-
-    user_id = int(call.data.split("royxat_rad:", 1)[1])
-    ariza = kutilayotgan_royxatlar.pop(user_id, None)
-    holatni_saqlash()
-
-    if not ariza:
-        bot.send_message(call.message.chat.id, "Bu ariza topilmadi — avval tasdiqlangan yoki rad etilgan bo'lishi mumkin.")
+    uid = int(call.data.split(":", 1)[1])
+    m = menejer_ol(uid)
+    if not m:
+        bot.answer_callback_query(call.id, "Menejer topilmadi.", show_alert=True)
         return
-
-    log.info("Ariza rad etildi: %s (user_id=%s) admin=%s tomonidan.", ariza["ism"], user_id, call.from_user.id)
-
+    m["status"] = "rad_etilgan"
+    m["rad_etgan_admin"] = call.from_user.id
+    m["rad_sana"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    json_saqlash(MENEDJERLAR_FAYLI, menedjerlar)
+    bot.answer_callback_query(call.id, "Rad etildi")
     try:
-        bot.edit_message_text(
-            call.message.text + f"\n\n❌ RAD ETILDI (admin: {call.from_user.first_name})",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-        )
+        bot.edit_message_text(call.message.text + "\n\n❌ RAD ETILDI",
+                              call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    try:
+        bot.send_message(uid, "❌ Menejerlik arizangiz rad etildi. Qayta topshirish uchun /manager buyrug'ini bosing.")
     except Exception:
         pass
 
-    bot.send_message(
-        ariza["chat_id"],
-        "❌ Afsuski, arizangiz rad etildi.\n\n"
-        "Qayta urinish uchun /start ni bosing."
-    )
-
-
-@bot.callback_query_handler(func=lambda call: not admin_mi(call.from_user.id) and not royxatdan_otganmi(call.from_user.id))
-def royxatdan_otmagan_callback(call):
-    if tasdiq_kutayotganmi(call.from_user.id):
-        bot.answer_callback_query(call.id, "Arizangiz hali admin tomonidan ko'rib chiqilmoqda.", show_alert=True)
+@bot.message_handler(commands=["start"])
+def start_handler_manager(message):
+    uid = message.from_user.id
+    if admin_mi(uid):
+        bot.send_message(message.chat.id, "👑 Rahbar paneli", reply_markup=rahbar_menu())
         return
-    bot.answer_callback_query(call.id, "Avval ro'yxatdan o'ting.", show_alert=True)
-    royxatdan_otishni_boshlash(call.message.chat.id)
+    if menejer_tasdiqlangan(uid):
+        bot.send_message(message.chat.id, "👨‍💼 Menejer paneli", reply_markup=menejer_menu())
+        return
+    menejer_royxatdan_otishni_boshlash(message.chat.id)
 
+@bot.message_handler(func=lambda m: m.text == "👤 Profilim")
+def manager_profile(message):
+    m = menejer_ol(message.from_user.id)
+    if not m:
+        menejer_royxatdan_otishni_boshlash(message.chat.id); return
+    bot.send_message(message.chat.id,
+        f"👤 <b>{m.get('ism','')}</b>\n"
+        f"📱 {m.get('telefon','')}\n"
+        f"📊 Status: {m.get('status','')}",
+        parse_mode="HTML")
 
-@bot.message_handler(func=lambda message: message.text in ["🔙 Orqaga", "🏠 Bosh menyu"])
-def cancel_and_back(message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
+def my_store_ids(uid):
+    return [sid for sid, d in dokonlar.items() if str(d.get("manager_id")) == str(uid)]
 
-    buyurtma_holati.pop(chat_id, None)
-    yangilash_holati.pop(user_id, None)
-    rasm_kutilayotganlar.pop(user_id, None)
-    aksiya_kutilayotganlar.pop(user_id, None)
-    qidiruv_kutayotganlar.discard(chat_id)
+@bot.message_handler(func=lambda m: m.text == "🏪 Mening do'konlarim")
+def my_stores(message):
+    uid = message.from_user.id
+    if not menejer_tasdiqlangan(uid):
+        bot.send_message(message.chat.id, "❌ Siz tasdiqlangan menejer emassiz."); return
+    ids = my_store_ids(uid)
+    if not ids:
+        bot.send_message(message.chat.id, "🏪 Sizga hali do'kon biriktirilmagan.")
+        return
+    text = "🏪 <b>Mening do'konlarim</b>\n\n"
+    for sid in ids:
+        d = dokonlar[sid]
+        text += f"• <b>{d.get('nomi','')}</b>\n  📍 {d.get('manzil','')}\n  📱 {d.get('telefon','')}\n\n"
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
 
-    bot.send_message(
-        chat_id,
-        "🏠 Asosiy menyuga qaytdingiz.",
-        reply_markup=bosh_menyu_yaratish(user_id)
-    )
+# ---------------- DO'KON BOSHQARUVI (RAHBAR) ----------------
+@bot.message_handler(func=lambda m: m.text == "🏪 Do'konlar" and rahbar_mi(m.from_user.id))
+def stores_admin(message):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("➕ Do'kon qo'shish", callback_data="dokon_add"))
+    kb.add(types.InlineKeyboardButton("📋 Do'konlar ro'yxati", callback_data="dokon_list"))
+    bot.send_message(message.chat.id, "🏪 Do'konlar boshqaruvi:", reply_markup=kb)
 
-
-@bot.message_handler(commands=["groupid"])
-def groupid_handler(message):
-    bot.send_message(message.chat.id, f"🆔 Ushbu chat ID: `{message.chat.id}`", parse_mode="Markdown")
-
-
-@bot.message_handler(commands=['start'])
-def start_handler(message):
-    bot.send_message(
-        message.chat.id,
-        "Assalomu alaykum! Xorazm baza savdo botiga xush kelibsiz.\n\n"
-        "Bu bot orqali siz ombordagi mahsulotlar qoldig'ini ko'rishingiz "
-        "va zakaz berishingiz mumkin bo'ladi.",
-        reply_markup=bosh_menyu_yaratish(message.from_user.id)
-    )
-    kategoriyalarni_korsatish(message.chat.id)
-
-
-# ==========================================
-# BRENDLAR BO'LIMI 
-# ==========================================
-@bot.message_handler(func=lambda message: message.text == "🏷 Brendlar")
-def menyu_brendlar(message):
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-    brendlar = ["SAMSUNG", "PREMIER", "SONOR", "AUFIT"]
-    
-    tugmalar = [types.InlineKeyboardButton(text=f"🏢 {brend}", callback_data=f"brend:{brend}") for brend in brendlar]
-    keyboard.add(*tugmalar)
-        
-    bot.send_message(
-        message.chat.id, 
-        "Qaysi brenddagi mahsulotlarni ko'rmoqchisiz?", 
-        reply_markup=keyboard
-    )
-    bot.send_message(
-        message.chat.id, 
-        "Ortga qaytish uchun pastdagi '🔙 Orqaga' tugmasini bosing:",
-        reply_markup=orqaga_menyu_yaratish()
-    )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("brend:"))
-def brend_tanlandi(call):
+@bot.callback_query_handler(func=lambda c: c.data == "dokon_add")
+def store_add_start(call):
+    if not rahbar_mi(call.from_user.id): return
+    dokon_holati[call.from_user.id] = {"bosqich":"nomi"}
     bot.answer_callback_query(call.id)
-    tanlangan_brend = call.data.split("brend:", 1)[1]
+    bot.send_message(call.message.chat.id, "🏪 Do'kon nomini kiriting:", reply_markup=types.ReplyKeyboardRemove())
 
-    try:
-        malumotlar = ombor_malumotlarini_oqish()
-    except Exception as e:
-        bot.send_message(call.message.chat.id, f"Xatolik yuz berdi: {e}")
-        return
-
-    kategoriyalar = []
-    for kategoriya, mahsulotlar in malumotlar.items():
-        for item in mahsulotlar:
-            soni = item[1]
-            brend = item[4] if len(item) > 4 else ""
-            if brend.lower() == tanlangan_brend.lower() and soni and soni > 0:
-                if kategoriya not in kategoriyalar:
-                    kategoriyalar.append(kategoriya)
-                break
-
-    if not kategoriyalar:
-        bot.send_message(
-            call.message.chat.id,
-            f"Kechirasiz, <b>{tanlangan_brend}</b> brendiga oid mahsulotlar hozircha omborda yo'q.",
-            parse_mode="HTML"
-        )
-        return
-
-    keyboard = types.InlineKeyboardMarkup()
-    for kategoriya in kategoriyalar:
-        keyboard.add(types.InlineKeyboardButton(
-            text=kategoriya,
-            callback_data=f"brendkat:{tanlangan_brend}|{kategoriya}"
-        ))
-
-    bot.send_message(
-        call.message.chat.id,
-        f"🏢 <b>{tanlangan_brend}</b> — qaysi kategoriyani ko'rmoqchisiz?",
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("brendkat:"))
-def brend_kategoriya_tanlandi(call):
+@bot.callback_query_handler(func=lambda c: c.data == "dokon_list")
+def store_list(call):
+    if not rahbar_mi(call.from_user.id): return
     bot.answer_callback_query(call.id)
-    tanlangan_brend, kategoriya = call.data.split("brendkat:", 1)[1].split("|", 1)
+    if not dokonlar:
+        bot.send_message(call.message.chat.id, "Hozircha do'konlar yo'q."); return
+    for sid, d in dokonlar.items():
+        manager = menejer_ol(d.get("manager_id"))
+        mgr = manager.get("ism") if manager else "Biriktirilmagan"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("👨‍💼 Menejer biriktirish", callback_data=f"dokon_mgr:{sid}"))
+        bot.send_message(call.message.chat.id,
+            f"🏪 <b>{d.get('nomi','')}</b>\n📍 {d.get('manzil','')}\n"
+            f"📱 {d.get('telefon','')}\n👨‍💼 Menejer: {mgr}",
+            parse_mode="HTML", reply_markup=kb)
 
+@bot.callback_query_handler(func=lambda c: c.data.startswith("dokon_mgr:"))
+def store_assign_start(call):
+    if not rahbar_mi(call.from_user.id): return
+    sid = call.data.split(":",1)[1]
+    d = dokonlar.get(sid)
+    if not d: return
+    kb = types.InlineKeyboardMarkup()
+    for uid, m in menedjerlar.items():
+        if m.get("status") == "tasdiqlangan":
+            kb.add(types.InlineKeyboardButton(m.get("ism","Noma'lum"), callback_data=f"assign:{sid}:{uid}"))
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, f"🏪 {d.get('nomi')} uchun menejerni tanlang:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("assign:"))
+def store_assign(call):
+    if not rahbar_mi(call.from_user.id): return
+    _, sid, uid = call.data.split(":",2)
+    if sid not in dokonlar or not menejer_tasdiqlangan(uid):
+        bot.answer_callback_query(call.id, "Ma'lumot topilmadi", show_alert=True); return
+    dokonlar[sid]["manager_id"] = int(uid)
+    json_saqlash(DOKONLAR_FAYLI, dokonlar)
+    bot.answer_callback_query(call.id, "Biriktirildi")
+    bot.send_message(call.message.chat.id, f"✅ {dokonlar[sid]['nomi']} do'koni menejerga biriktirildi.")
     try:
-        malumotlar = ombor_malumotlarini_oqish()
-    except Exception as e:
-        bot.send_message(call.message.chat.id, f"Xatolik yuz berdi: {e}")
-        return
+        bot.send_message(int(uid), f"🏪 Sizga yangi do'kon biriktirildi: {dokonlar[sid]['nomi']}")
+    except Exception: pass
 
-    mahsulotlar = malumotlar.get(kategoriya, [])
-    topilganlar = []
-    for item in mahsulotlar:
-        model, soni = item[0], item[1]
-        narxi = item[2] if len(item) > 2 and item[2] else 0
-        brend = item[4] if len(item) > 4 else ""
-        aksiya_bor = "🎉 " if (len(item) > 5 and item[5]) else ""
-        if brend.lower() == tanlangan_brend.lower() and soni and soni > 0:
-            topilganlar.append((model, soni, narxi, aksiya_bor))
+@bot.message_handler(content_types=["text"], func=lambda m: m.from_user.id in dokon_holati and rahbar_mi(m.from_user.id))
+def store_registration(message):
+    uid = message.from_user.id
+    st = dokon_holati.get(uid)
+    if not st: return
+    text = (message.text or "").strip()
+    if text in ("🏠 Bosh menyu","🔙 Orqaga"):
+        dokon_holati.pop(uid,None); bot.send_message(message.chat.id,"🏠",reply_markup=rahbar_menu()); return
+    if st["bosqich"] == "nomi":
+        if len(text)<2: bot.send_message(message.chat.id,"Do'kon nomini kiriting."); return
+        st["nomi"]=text; st["bosqich"]="telefon"
+        bot.send_message(message.chat.id,"📱 Do'kon telefon raqamini kiriting:")
+    elif st["bosqich"] == "telefon":
+        st["telefon"]=text; st["bosqich"]="manzil"
+        bot.send_message(message.chat.id,"📍 Do'kon manzilini kiriting:")
+    elif st["bosqich"] == "manzil":
+        st["manzil"]=text
+        sid = "DOK-" + str(len(dokonlar)+1).zfill(4)
+        while sid in dokonlar:
+            sid = "DOK-" + str(int(sid.split("-")[1])+1).zfill(4)
+        dokonlar[sid] = {
+            "id":sid, "nomi":st["nomi"], "telefon":st["telefon"],
+            "manzil":st["manzil"], "manager_id":None,
+            "sana":datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        json_saqlash(DOKONLAR_FAYLI,dokonlar)
+        dokon_holati.pop(uid,None)
+        bot.send_message(message.chat.id,f"✅ Do'kon qo'shildi: {st['nomi']}",reply_markup=rahbar_menu())
 
-    if not topilganlar:
-        bot.send_message(call.message.chat.id, "Bu kategoriyada hozircha omborda mahsulot yo'q.")
-        return
+# ---------------- SAVDO KIRITISH ----------------
+@bot.message_handler(func=lambda m: m.text == "🛒 Savdo kiritish")
+def sale_start(message):
+    uid=message.from_user.id
+    if not menejer_tasdiqlangan(uid):
+        bot.send_message(message.chat.id,"❌ Siz tasdiqlangan menejer emassiz."); return
+    ids=my_store_ids(uid)
+    if not ids:
+        bot.send_message(message.chat.id,"❌ Avval sizga do'kon biriktirilishi kerak."); return
+    kb=types.InlineKeyboardMarkup()
+    for sid in ids:
+        kb.add(types.InlineKeyboardButton(dokonlar[sid]["nomi"],callback_data=f"sale_store:{sid}"))
+    bot.send_message(message.chat.id,"🏪 Savdo qaysi do'kon uchun?",reply_markup=kb)
 
-    keyboard = types.InlineKeyboardMarkup()
-    for model, soni, narxi, aksiya_bor in topilganlar:
-        keyboard.add(types.InlineKeyboardButton(
-            text=f"{aksiya_bor}{model} — ${narxi:,.2f}",
-            callback_data=f"buy:{kategoriya}|{model}"
-        ))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_store:"))
+def sale_store(call):
+    uid=call.from_user.id; sid=call.data.split(":",1)[1]
+    if sid not in my_store_ids(uid):
+        bot.answer_callback_query(call.id,"Bu do'kon sizga biriktirilmagan.",show_alert=True); return
+    savdo_holati[uid]={"bosqich":"kategoriya","dokon_id":sid}
+    bot.answer_callback_query(call.id)
+    try: data=ombor_malumotlarini_oqish()
+    except Exception: data={}
+    kb=types.InlineKeyboardMarkup()
+    for k in data: kb.add(types.InlineKeyboardButton(k,callback_data=f"sale_cat:{k}"))
+    bot.send_message(call.message.chat.id,"📦 Kategoriyani tanlang:",reply_markup=kb)
 
-    bot.send_message(
-        call.message.chat.id,
-        f"🏢 <b>{tanlangan_brend}</b> — <b>{kategoriya}</b>:",
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
-# ==========================================
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_cat:"))
+def sale_category(call):
+    uid=call.from_user.id; st=savdo_holati.get(uid)
+    if not st: return
+    cat=call.data.split(":",1)[1]; st["kategoriya"]=cat; st["bosqich"]="model"
+    data=ombor_malumotlarini_oqish()
+    kb=types.InlineKeyboardMarkup()
+    for item in data.get(cat,[]):
+        kb.add(types.InlineKeyboardButton(f"{item[0]} | {item[1]} dona",callback_data=f"sale_model:{cat}|{item[0]}"))
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,"Modelni tanlang:",reply_markup=kb)
 
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_model:"))
+def sale_model(call):
+    uid=call.from_user.id; st=savdo_holati.get(uid)
+    if not st: return
+    cat,model=call.data.split(":",1)[1].split("|",1)
+    st.update({"kategoriya":cat,"model":model,"bosqich":"son"})
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,"🔢 Nechta dona sotildi?")
 
+@bot.message_handler(func=lambda m: m.from_user.id in savdo_holati and savdo_holati[m.from_user.id].get("bosqich")=="son")
+def sale_quantity(message):
+    uid=message.from_user.id; st=savdo_holati[uid]
+    if not (message.text or "").isdigit() or int(message.text)<=0:
+        bot.send_message(message.chat.id,"Musbat son kiriting."); return
+    st["son"]=int(message.text); st["bosqich"]="narx"
+    data=ombor_malumotlarini_oqish()
+    item=next((x for x in data.get(st["kategoriya"],[]) if x[0]==st["model"]),None)
+    default_price=item[2] if item else 0
+    bot.send_message(message.chat.id,f"💵 Sotuv narxini kiriting.\nTavsiya narx: ${default_price:,.0f}")
+
+@bot.message_handler(func=lambda m: m.from_user.id in savdo_holati and savdo_holati[m.from_user.id].get("bosqich")=="narx")
+def sale_price(message):
+    uid=message.from_user.id; st=savdo_holati[uid]
+    raw=(message.text or "").replace(" ","").replace(",","")
+    try: price=float(raw)
+    except:
+        bot.send_message(message.chat.id,"Narxni raqam bilan kiriting."); return
+    item={
+        "id":len(savdolar)+1,
+        "sana":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "manager_id":uid,
+        "dokon_id":st["dokon_id"],
+        "kategoriya":st["kategoriya"],
+        "model":st["model"],
+        "son":st["son"],
+        "narx":price,
+        "summa":st["son"]*price
+    }
+    savdolar.append(item); json_saqlash(SAVDOLAR_FAYLI,savdolar)
+    savdo_holati.pop(uid,None)
+    bot.send_message(message.chat.id,
+        f"✅ Savdo saqlandi!\n\n🏪 {dokonlar[item['dokon_id']]['nomi']}\n"
+        f"📦 {item['model']} — {item['son']} dona\n💰 ${item['summa']:,.0f}",
+        reply_markup=menejer_menu())
+
+@bot.message_handler(func=lambda m: m.text == "📊 Mening savdom")
+def my_sales(message):
+    uid=message.from_user.id
+    if not menejer_tasdiqlangan(uid): return
+    rows=[x for x in savdolar if str(x.get("manager_id"))==str(uid)]
+    total=sum(x.get("summa",0) for x in rows)
+    qty=sum(x.get("son",0) for x in rows)
+    bot.send_message(message.chat.id,f"📊 <b>Mening savdom</b>\n\n📦 Mahsulot: {qty} dona\n💰 Jami savdo: ${total:,.0f}\n🧾 Savdo soni: {len(rows)}",parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "🎯 Mening planim")
+def my_plan(message):
+    bot.send_message(message.chat.id,"🎯 Plan moduli keyingi bosqichda ulanadi.")
+
+@bot.message_handler(func=lambda m: m.text == "💰 Qarzdorlik")
+def my_debt(message):
+    bot.send_message(message.chat.id,"💰 Qarzdorlik moduli keyingi bosqichda ulanadi.")
+
+@bot.message_handler(func=lambda m: m.text == "💸 Rasxod")
+def my_expense(message):
+    bot.send_message(message.chat.id,"💸 Rasxod moduli keyingi bosqichda ulanadi.")
+
+@bot.message_handler(func=lambda m: m.text == "📦 Buyurtmalar")
+def my_orders(message):
+    bot.send_message(message.chat.id,"📦 Buyurtmalar moduli keyingi bosqichda ulanadi.")
+
+# ---------------- RAHBAR STATISTIKASI ----------------
+@bot.message_handler(func=lambda m: m.text == "👨‍💼 Menejerlar" and rahbar_mi(m.from_user.id))
+def managers_list(message):
+    text="👨‍💼 <b>Menejerlar</b>\n\n"
+    if not menedjerlar: text+="Hozircha menejer yo'q."
+    else:
+        for uid,m in menedjerlar.items():
+            text += f"• {m.get('ism')} — {m.get('status')}\n"
+    bot.send_message(message.chat.id,text,parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "📊 Umumiy savdo" and rahbar_mi(m.from_user.id))
+def total_sales(message):
+    total=sum(x.get("summa",0) for x in savdolar)
+    qty=sum(x.get("son",0) for x in savdolar)
+    bot.send_message(message.chat.id,f"📊 <b>Umumiy savdo</b>\n\n📦 {qty} dona\n💰 ${total:,.0f}",parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "🏆 Menejerlar reytingi" and rahbar_mi(m.from_user.id))
+def manager_rating(message):
+    stats=[]
+    for uid,m in menedjerlar.items():
+        if m.get("status")!="tasdiqlangan": continue
+        rows=[x for x in savdolar if str(x.get("manager_id"))==str(uid)]
+        stats.append((sum(x.get("summa",0) for x in rows),m.get("ism","")))
+    stats.sort(reverse=True)
+    text="🏆 <b>Menejerlar reytingi</b>\n\n"
+    for i,(total,name) in enumerate(stats,1):
+        text+=f"{i}. {name} — ${total:,.0f}\n"
+    bot.send_message(message.chat.id,text if len(stats) else "Hozircha savdo yo'q.",parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "🎯 Planlar" and rahbar_mi(m.from_user.id))
+def plans_admin(message): bot.send_message(message.chat.id,"🎯 Plan moduli keyingi bosqichda ulanadi.")
+
+@bot.message_handler(func=lambda m: m.text == "💰 Qarzdorlik" and rahbar_mi(m.from_user.id))
+def debt_admin(message): bot.send_message(message.chat.id,"💰 Qarzdorlik moduli keyingi bosqichda ulanadi.")
+
+@bot.message_handler(func=lambda m: m.text == "💸 Rasxodlar" and rahbar_mi(m.from_user.id))
+def expense_admin(message): bot.send_message(message.chat.id,"💸 Rasxodlar moduli keyingi bosqichda ulanadi.")
+
+@bot.message_handler(func=lambda m: m.text == "📈 Savdo analitikasi" and rahbar_mi(m.from_user.id))
+def analytics_admin(message):
+    by_cat={}
+    by_model={}
+    for x in savdolar:
+        by_cat[x["kategoriya"]]=by_cat.get(x["kategoriya"],0)+x.get("summa",0)
+        by_model[x["model"]]=by_model.get(x["model"],0)+x.get("summa",0)
+    text="📈 <b>Savdo analitikasi</b>\n\n<b>Kategoriya:</b>\n"
+    for k,v in sorted(by_cat.items(),key=lambda z:z[1],reverse=True): text+=f"• {k}: ${v:,.0f}\n"
+    text+="\n<b>Model:</b>\n"
+    for k,v in sorted(by_model.items(),key=lambda z:z[1],reverse=True)[:20]: text+=f"• {k}: ${v:,.0f}\n"
+    bot.send_message(message.chat.id,text,parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text == "🔄 Ombor sonini yangilash" and rahbar_mi(m.from_user.id))
+def stock_update_alias(message):
+    # Eski /yangilash funksiyasidan foydalanish uchun
+    bot.send_message(message.chat.id,"Ombor sonini yangilash uchun /yangilash buyrug'ini bosing.")
+
+def bosh_menyu_yaratish(user_id=None):
+    return rahbar_menu() if rahbar_mi(user_id) else menejer_menu()
+
+def orqaga_menyu_yaratish():
+    kb=types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("🔙 Orqaga"), types.KeyboardButton("🏠 Bosh menyu"))
+    return kb
 # ADMIN RASM BO'LIMI FUNKSIYASI
 def mahsulot_rasmi_menyu_chiqarish(chat_id, user_id):
     if not admin_mi(user_id):
@@ -2148,12 +2216,11 @@ def yangi_sonni_qabul_qilish(message):
         )
 
 
+
 if __name__ == "__main__":
     hisoblagichni_tiklash()
-    foydalanuvchilarni_yuklash()
-    holatni_yuklash()
     threading.Thread(target=avtomatik_saqlash_oqimi, daemon=True).start()
-    log.info("Bot ishga tushdi...")
+    log.info("Menejer/Rahbar bot ishga tushdi...")
     while True:
         try:
             bot.infinity_polling(timeout=30, long_polling_timeout=30)
