@@ -3143,3 +3143,275 @@ def mening_menejer_buyurtmalarim(message):
             f"🕐 {x.get('sana')}\n\n"
         )
     bot.send_message(message.chat.id, matn, parse_mode="HTML", reply_markup=menejer_menu())
+
+# ============================================================
+# 9-BOSQICH: BUYURTMA + OMBOR NAZORATI
+# Rahbar buyurtmani tasdiqlaganda ombor avtomatik kamaymaydi.
+# Ombor faqat "yetkazildi" bosqichiga o'tganda kamaytiriladi.
+# Shu bilan birga bir xil buyurtma ikki marta hisoblanishidan himoya bor.
+# ============================================================
+
+def menejer_buyurtma_top(bid):
+    data = menejer_buyurtmalarini_yuklash()
+    for x in data:
+        try:
+            if int(x.get("id", 0)) == int(bid):
+                return x
+        except Exception:
+            pass
+    return None
+
+def ombordagi_model(kategoriya, model):
+    data = ombor_malumotlarini_oqish()
+    for item in data.get(kategoriya, []):
+        if str(item[0]) == str(model):
+            return item
+    return None
+
+def ombor_buyurtma_uchun_tekshir(order):
+    xatolar = []
+    for item in order.get("itemlar", []):
+        row = ombor_malum_model = ombor_malumotlarini_oqish().get(item["kategoriya"], [])
+        found = next((r for r in row if str(r[0]) == str(item["model"])), None)
+        if not found:
+            xatolar.append(f"❌ {item['model']} — omborda topilmadi")
+            continue
+        mavjud = int(_float(found[1]))
+        kerak = int(item["son"])
+        if kerak > mavjud:
+            xatolar.append(
+                f"❌ {item['model']} — kerak: {kerak}, mavjud: {mavjud}"
+            )
+    return xatolar
+
+def ombor_soni_ayirish(order):
+    """
+    Buyurtma 'yetkazildi' bo'lganda Excel omboridan ayiradi.
+    Natijada buyurtma ikki marta yetkazildi holatiga o'tkazilsa,
+    qayta ayirish amalga oshirilmaydi.
+    """
+    if order.get("ombor_ayirildi"):
+        return True, []
+
+    data = ombor_malumotlarini_oqish()
+    xatolar = []
+
+    # Avval barcha pozitsiyalarni tekshiramiz.
+    for item in order.get("itemlar", []):
+        rows = data.get(item["kategoriya"], [])
+        found = next((r for r in rows if str(r[0]) == str(item["model"])), None)
+        if not found:
+            xatolar.append(f"{item['model']} — topilmadi")
+            continue
+        mavjud = int(_float(found[1]))
+        kerak = int(item["son"])
+        if kerak > mavjud:
+            xatolar.append(f"{item['model']} — {mavjud} dona mavjud, {kerak} dona kerak")
+
+    if xatolar:
+        return False, xatolar
+
+    # Keyin ayiramiz.
+    for item in order.get("itemlar", []):
+        rows = data.get(item["kategoriya"], [])
+        found = next((r for r in rows if str(r[0]) == str(item["model"])), None)
+        found[1] = int(_float(found[1])) - int(item["son"])
+
+    # Mavjud botning Excel saqlash funksiyasidan foydalanishga harakat.
+    saqlangan = False
+    try:
+        if "ombor_malumotlarini_saqlash" in globals():
+            ombor_malumotlarini_saqlash(data)
+            saqlangan = True
+    except Exception:
+        log.exception("Omborni saqlashda xatolik")
+
+    if not saqlangan:
+        # Baza.xlsx to'g'ridan-to'g'ri yangilanadi.
+        try:
+            wb = openpyxl.load_workbook(EXCEL_FILE)
+            ws = wb.active
+            for row in range(2, ws.max_row + 1):
+                kat = str(ws.cell(row, 2).value or "").strip()
+                model = str(ws.cell(row, 3).value or "").strip()
+                for item in order.get("itemlar", []):
+                    if kat == str(item["kategoriya"]) and model == str(item["model"]):
+                        eski = int(_float(ws.cell(row, 4).value))
+                        ws.cell(row, 4).value = eski - int(item["son"])
+            wb.save(EXCEL_FILE)
+            saqlangan = True
+        except Exception:
+            log.exception("Baza.xlsx ni yangilashda xatolik")
+
+    if not saqlangan:
+        return False, ["Excel omborini saqlab bo'lmadi"]
+
+    return True, []
+
+def menejer_buyurtma_status_yangila(bid, yangi_status, rahbar_id=None):
+    data = menejer_buyurtmalarini_yuklash()
+    for order in data:
+        if int(order.get("id", 0)) != int(bid):
+            continue
+
+        eski = order.get("status", "yangi")
+
+        # Yetkazilgan buyurtma qayta o'zgartirilmaydi.
+        if eski == "yetkazildi":
+            return order, False, "Bu buyurtma allaqachon yetkazilgan."
+
+        if yangi_status == "yetkazildi":
+            ok, errors = ombor_soni_ayirish(order)
+            if not ok:
+                return order, False, "Ombor yetarli emas:\n" + "\n".join(errors)
+            order["ombor_ayirildi"] = True
+
+        order["status"] = yangi_status
+        order["status_vaqti"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if rahbar_id:
+            order["status_rahbar_id"] = rahbar_id
+
+        menejer_buyurtmalarini_saqlash(data)
+        return order, True, None
+
+    return None, False, "Buyurtma topilmadi."
+
+def menejer_buyurtma_status_kb(bid, status):
+    kb = types.InlineKeyboardMarkup()
+    if status == "yangi":
+        kb.add(
+            types.InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"mboq:{bid}"),
+            types.InlineKeyboardButton("❌ Bekor qilish", callback_data=f"mbcan:{bid}")
+        )
+    elif status == "tasdiqlandi":
+        kb.add(types.InlineKeyboardButton("📦 Tayyorlanmoqda", callback_data=f"mbprep:{bid}"))
+    elif status == "tayyorlanmoqda":
+        kb.add(types.InlineKeyboardButton("🚚 Yo'lda", callback_data=f"mbroad:{bid}"))
+    elif status == "yolda":
+        kb.add(types.InlineKeyboardButton("✅ Yetkazildi", callback_data=f"mbdone:{bid}"))
+    return kb
+
+def rahbar_buyurtma_matni(order):
+    statuslar = {
+        "yangi": "🕐 Yangi",
+        "tasdiqlandi": "✅ Tasdiqlandi",
+        "tayyorlanmoqda": "📦 Tayyorlanmoqda",
+        "yolda": "🚚 Yo'lda",
+        "yetkazildi": "🏁 Yetkazildi",
+        "bekor_qilindi": "❌ Bekor qilindi",
+    }
+    matn = (
+        f"📦 <b>Buyurtma #{order['id']}</b>\n"
+        f"👨‍💼 Menejer: {order.get('manager_ism', '')}\n"
+        f"🏪 Do'kon: {order.get('dokon_nomi', '')}\n"
+        f"📅 Sana: {order.get('sana', '')}\n"
+        f"📌 Status: {statuslar.get(order.get('status'), order.get('status'))}\n\n"
+    )
+    for item in order.get("itemlar", []):
+        summa = _float(item["narx"]) * int(item["son"])
+        matn += f"• {item['model']} — {item['son']} dona — ${summa:,.0f}\n"
+    matn += f"\n💰 <b>Jami: ${_float(order.get('jami_summa')):,.0f}</b>"
+    return matn
+
+@bot.message_handler(func=lambda m: m.text == "📦 Buyurtmalar" and rahbar_mi(m.from_user.id))
+def rahbar_buyurtmalar_menu(message):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("🆕 Yangi buyurtmalar", "📋 Barcha buyurtmalar")
+    kb.add("🏠 Bosh menyu")
+    bot.send_message(message.chat.id, "📦 Rahbar buyurtmalar bo'limi:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: m.text == "🆕 Yangi buyurtmalar" and rahbar_mi(m.from_user.id))
+def rahbar_yangi_buyurtmalar(message):
+    data = menejer_buyurtmalarini_yuklash()
+    yangi = [x for x in data if x.get("status") == "yangi"]
+    if not yangi:
+        bot.send_message(message.chat.id, "🕐 Yangi buyurtmalar yo'q.")
+        return
+
+    for order in reversed(yangi[-20:]):
+        bot.send_message(
+            message.chat.id,
+            rahbar_buyurtma_matni(order),
+            parse_mode="HTML",
+            reply_markup=menejer_buyurtma_status_kb(order["id"], order["status"])
+        )
+
+@bot.message_handler(func=lambda m: m.text == "📋 Barcha buyurtmalar" and rahbar_mi(m.from_user.id))
+def rahbar_barcha_buyurtmalar(message):
+    data = menejer_buyurtmalarini_yuklash()
+    if not data:
+        bot.send_message(message.chat.id, "Hozircha buyurtmalar yo'q.")
+        return
+
+    for order in reversed(data[-30:]):
+        bot.send_message(
+            message.chat.id,
+            rahbar_buyurtma_matni(order),
+            parse_mode="HTML",
+            reply_markup=menejer_buyurtma_status_kb(order["id"], order.get("status"))
+        )
+
+def _rahbar_order_status_callback(call, target_status):
+    bot.answer_callback_query(call.id)
+    if not rahbar_mi(call.from_user.id):
+        return
+
+    bid = int(call.data.split(":", 1)[1])
+    order, changed, error = menejer_buyurtma_status_yangila(
+        bid, target_status, call.from_user.id
+    )
+    if not order:
+        bot.send_message(call.message.chat.id, "❌ Buyurtma topilmadi.")
+        return
+
+    if not changed:
+        bot.send_message(call.message.chat.id, f"❌ {error}")
+        return
+
+    try:
+        bot.edit_message_text(
+            rahbar_buyurtma_matni(order),
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=menejer_buyurtma_status_kb(order["id"], order["status"])
+        )
+    except Exception:
+        pass
+
+    statuslar = {
+        "tasdiqlandi": "✅ Buyurtmangiz tasdiqlandi.",
+        "tayyorlanmoqda": "📦 Buyurtmangiz tayyorlanmoqda.",
+        "yolda": "🚚 Buyurtmangiz yo'lga chiqdi.",
+        "yetkazildi": "🏁 Buyurtmangiz yetkazildi.",
+        "bekor_qilindi": "❌ Buyurtmangiz bekor qilindi.",
+    }
+    try:
+        bot.send_message(
+            int(order["manager_id"]),
+            f"{statuslar.get(order['status'], 'Buyurtma statusi o‘zgardi.')}\n"
+            f"📦 Buyurtma #{order['id']}\n"
+            f"🏪 {order['dokon_nomi']}"
+        )
+    except Exception:
+        log.exception("Menejerga buyurtma statusini yuborishda xatolik")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mboq:"))
+def order_tasdiqlash_callback(call):
+    _rahbar_order_status_callback(call, "tasdiqlandi")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mbcan:"))
+def order_bekor_callback(call):
+    _rahbar_order_status_callback(call, "bekor_qilindi")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mbprep:"))
+def order_tayyorlash_callback(call):
+    _rahbar_order_status_callback(call, "tayyorlanmoqda")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mbroad:"))
+def order_yolda_callback(call):
+    _rahbar_order_status_callback(call, "yolda")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mbdone:"))
+def order_yetkazildi_callback(call):
+    _rahbar_order_status_callback(call, "yetkazildi")
