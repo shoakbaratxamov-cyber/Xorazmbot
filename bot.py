@@ -3557,30 +3557,6 @@ def kpi_reyting_matni(oy=None):
         )
     return matn
 
-@bot.message_handler(func=lambda m: m.text == "🏆 Menejerlar reytingi" and rahbar_mi(m.from_user.id))
-def rahbar_kpi_reyting(message):
-    bot.send_message(
-        message.chat.id,
-        kpi_reyting_matni(),
-        parse_mode="HTML",
-        reply_markup=rahbar_menu()
-    )
-
-@bot.message_handler(func=lambda m: m.text == "👨‍💼 Menejerlar" and rahbar_mi(m.from_user.id))
-def rahbar_menejerlar_kpi(message):
-    rows = tasdiqlangan_menejerlar()
-    if not rows:
-        bot.send_message(message.chat.id, "Tasdiqlangan menejerlar yo'q.")
-        return
-
-    kb = types.InlineKeyboardMarkup()
-    for uid, info in rows:
-        kb.add(types.InlineKeyboardButton(
-            f"👨‍💼 {info.get('ism', 'Nomsiz')}",
-            callback_data=f"mkpi:{uid}"
-        ))
-    bot.send_message(message.chat.id, "Menejerning KPI hisobotini tanlang:", reply_markup=kb)
-
 @bot.callback_query_handler(func=lambda c: c.data.startswith("mkpi:"))
 def rahbar_menejer_kpi_callback(call):
     bot.answer_callback_query(call.id)
