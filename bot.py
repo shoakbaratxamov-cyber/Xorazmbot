@@ -512,10 +512,12 @@ MENEDJERLAR_FAYLI = "menedjerlar.json"
 DOKONLAR_FAYLI = "dokonlar.json"
 SAVDOLAR_FAYLI = "savdolar.json"
 PLANLAR_FAYLI = "planlar.json"
+RASXODLAR_FAYLI = "rasxodlar.json"
 
 menedjer_holati = {}
 dokon_holati = {}
 savdo_holati = {}
+rasxod_holati = {}
 
 def json_yukla(fayl, default):
     try:
@@ -541,6 +543,7 @@ menedjerlar = json_yukla(MENEDJERLAR_FAYLI, {})
 dokonlar = json_yukla(DOKONLAR_FAYLI, {})
 savdolar = json_yukla(SAVDOLAR_FAYLI, [])
 planlar = json_yukla(PLANLAR_FAYLI, {})
+rasxodlar = json_yukla(RASXODLAR_FAYLI, [])
 
 # Eski holat saqlash funksiyasi bilan moslik uchun (mijoz registratsiyasi ishlatilmaydi)
 kutilayotgan_royxatlar = {}
@@ -850,7 +853,21 @@ def plan_value_received(message):
 
 
 @bot.message_handler(func=lambda m: m.text == "💸 Rasxodlar" and rahbar_mi(m.from_user.id))
-def expense_admin(message): bot.send_message(message.chat.id,"💸 Rasxodlar moduli keyingi bosqichda ulanadi.")
+def expense_admin(message):
+    if not rasxodlar:
+        bot.send_message(message.chat.id, "💸 Hozircha rasxodlar kiritilmagan.")
+        return
+    jami = sum(float(x.get("summa", 0)) for x in rasxodlar if x.get("status") != "rad_etilgan")
+    text = f"💸 <b>Rasxodlar</b>\n\n💰 Jami: <b>{jami:,.0f} so'm</b>\n\n"
+    for x in reversed(rasxodlar[-30:]):
+        status = x.get("status", "tasdiqlangan")
+        belgi = {"kutilmoqda":"🕓", "tasdiqlangan":"✅", "rad_etilgan":"❌"}.get(status, "•")
+        text += (f"{belgi} <b>{x.get('kategoriya','Boshqa')}</b> — {float(x.get('summa',0)):,.0f} so'm\n"
+                  f"👤 {x.get("manager_name","Noma'lum")} | {x.get('sana','')}\n")
+        if x.get("izoh"):
+            text += f"📝 {x['izoh']}\n"
+        text += "\n"
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "📈 Savdo analitikasi" and rahbar_mi(m.from_user.id))
 def analytics_admin(message):
@@ -2459,9 +2476,146 @@ def qarz_input(message):
         reply_markup=orqaga_menyu_yaratish())
 
 
-@bot.message_handler(func=lambda m: m.text == "💸 Rasxod")
+RASXOD_KATEGORIYALARI = [
+    "🚗 Yo'l", "⛽ Benzin", "🍽 Ovqat", "🏨 Mehmonxona",
+    "📱 Telefon", "📢 Reklama", "🚚 Yetkazib berish", "📦 Boshqa"
+]
+
+def rasxod_miqdori(manager_id=None, statuslar=None):
+    natija = 0.0
+    for x in rasxodlar:
+        if manager_id is not None and str(x.get("manager_id")) != str(manager_id):
+            continue
+        if statuslar is not None and x.get("status") not in statuslar:
+            continue
+        natija += float(x.get("summa", 0) or 0)
+    return natija
+
+@bot.message_handler(func=lambda m: m.text == "💸 Rasxod" and menejer_tasdiqlangan(m.from_user.id))
 def my_expense(message):
-    bot.send_message(message.chat.id,"💸 Rasxod moduli keyingi bosqichda ulanadi.")
+    uid = message.from_user.id
+    shaxsiy = [x for x in rasxodlar if str(x.get("manager_id")) == str(uid)]
+    jami = rasxod_miqqori = rasxod_miqdori(uid, {"kutilmoqda", "tasdiqlangan"})
+    text = f"💸 <b>Mening rasxodlarim</b>\n\n💰 Jami: <b>{jami:,.0f} so'm</b>\n"
+    if shaxsiy:
+        text += "\n📜 Oxirgi rasxodlar:\n"
+        for x in reversed(shaxsiy[-10:]):
+            belgi = {"kutilmoqda":"🕓", "tasdiqlangan":"✅", "rad_etilgan":"❌"}.get(x.get("status"), "•")
+            text += f"{belgi} {x.get('kategoriya','Boshqa')} — {float(x.get('summa',0)):,.0f} so'm\n"
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("➕ Rasxod kiritish", callback_data="rasxod_add"))
+    bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data == "rasxod_add")
+def rasxod_add_start(call):
+    uid = call.from_user.id
+    if not menejer_tasdiqlangan(uid):
+        bot.answer_callback_query(call.id, "Faqat tasdiqlangan menejerlar uchun.", show_alert=True)
+        return
+    rasxod_holati[uid] = {"bosqich": "kategoriya"}
+    bot.answer_callback_query(call.id)
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for i, nom in enumerate(RASXOD_KATEGORIYALARI):
+        kb.add(types.InlineKeyboardButton(nom, callback_data=f"rasxod_kat:{i}"))
+    bot.send_message(call.message.chat.id, "💸 Rasxod kategoriyasini tanlang:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rasxod_kat:"))
+def rasxod_category(call):
+    uid = call.from_user.id
+    if not menejer_tasdiqlangan(uid) or uid not in rasxod_holati:
+        bot.answer_callback_query(call.id, "Jarayon topilmadi.", show_alert=True)
+        return
+    idx = int(call.data.split(":",1)[1])
+    if not 0 <= idx < len(RASXOD_KATEGORIYALARI):
+        return
+    rasxod_holati[uid] = {"bosqich": "summa", "kategoriya": RASXOD_KATEGORIYALARI[idx]}
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "💰 Rasxod summasini so'mda kiriting.\nMasalan: 150000", reply_markup=orqaga_menyu_yaratish())
+
+@bot.message_handler(func=lambda m: m.from_user.id in rasxod_holati)
+def rasxod_input(message):
+    uid = message.from_user.id
+    st = rasxod_holati.get(uid)
+    if not st or not menejer_tasdiqlangan(uid):
+        return
+    raw = (message.text or "").strip().replace(" ", "").replace(",", "").replace(".", "")
+    if st["bosqich"] == "summa":
+        try:
+            summa = float(raw)
+        except ValueError:
+            bot.send_message(message.chat.id, "❌ Summani faqat raqam bilan kiriting. Masalan: 150000")
+            return
+        if summa <= 0:
+            bot.send_message(message.chat.id, "❌ Summa 0 dan katta bo'lishi kerak.")
+            return
+        st["summa"] = summa
+        st["bosqich"] = "izoh"
+        bot.send_message(message.chat.id, "📝 Izoh yozing yoki '-' yuboring:", reply_markup=orqaga_menyu_yaratish())
+        return
+    izoh = (message.text or "").strip()
+    if izoh == "-":
+        izoh = ""
+    m = menejer_ol(uid)
+    rasxodlar.append({
+        "id": len(rasxodlar) + 1,
+        "manager_id": uid,
+        "manager_name": m.get("ism", "") if m else "",
+        "kategoriya": st["kategoriya"],
+        "summa": st["summa"],
+        "izoh": izoh,
+        "status": "kutilmoqda",
+        "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    json_saqlash(RASXODLAR_FAYLI, rasxodlar)
+    rasxod_holati.pop(uid, None)
+    # Rahbarlarga tasdiqlash uchun yuboramiz.
+    yangi = rasxodlar[-1]
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"rasxod_ok:{yangi['id']}"),
+           types.InlineKeyboardButton("❌ Rad etish", callback_data=f"rasxod_rad:{yangi['id']}"))
+    xabar = (f"🆕 <b>Yangi rasxod</b>\n\n👤 {yangi['manager_name']}\n"
+             f"💸 {yangi['kategoriya']}\n💰 {yangi['summa']:,.0f} so'm\n"
+             f"📝 {yangi['izoh'] or '-'}\n🕐 {yangi['sana']}")
+    for rid in ADMIN_IDLAR:
+        try:
+            bot.send_message(rid, xabar, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            log.exception("Rasxod rahbarga yuborilmadi: %s", rid)
+    bot.send_message(message.chat.id, "✅ Rasxod saqlandi va rahbar tasdig'iga yuborildi.", reply_markup=menejer_menu())
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rasxod_ok:"))
+def rasxod_approve(call):
+    if not rahbar_mi(call.from_user.id):
+        bot.answer_callback_query(call.id, "Ruxsat yo'q", show_alert=True); return
+    rid = int(call.data.split(":",1)[1])
+    x = next((z for z in rasxodlar if z.get("id") == rid), None)
+    if not x or x.get("status") != "kutilmoqda":
+        bot.answer_callback_query(call.id, "Bu rasxod allaqachon ko'rib chiqilgan.", show_alert=True); return
+    x["status"] = "tasdiqlangan"
+    x["tasdiqlagan"] = call.from_user.id
+    json_saqlash(RASXODLAR_FAYLI, rasxodlar)
+    bot.answer_callback_query(call.id, "Tasdiqlandi")
+    try: bot.edit_message_text(call.message.text + "\n\n✅ TASDIQLANDI", call.message.chat.id, call.message.message_id)
+    except Exception: pass
+    try: bot.send_message(int(x["manager_id"]), f"✅ Rasxodingiz tasdiqlandi: {float(x['summa']):,.0f} so'm")
+    except Exception: pass
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rasxod_rad:"))
+def rasxod_reject(call):
+    if not rahbar_mi(call.from_user.id):
+        bot.answer_callback_query(call.id, "Ruxsat yo'q", show_alert=True); return
+    rid = int(call.data.split(":",1)[1])
+    x = next((z for z in rasxodlar if z.get("id") == rid), None)
+    if not x or x.get("status") != "kutilmoqda":
+        bot.answer_callback_query(call.id, "Bu rasxod allaqachon ko'rib chiqilgan.", show_alert=True); return
+    x["status"] = "rad_etilgan"
+    x["rad_etgan"] = call.from_user.id
+    json_saqlash(RASXODLAR_FAYLI, rasxodlar)
+    bot.answer_callback_query(call.id, "Rad etildi")
+    try: bot.edit_message_text(call.message.text + "\n\n❌ RAD ETILDI", call.message.chat.id, call.message.message_id)
+    except Exception: pass
+    try: bot.send_message(int(x["manager_id"]), "❌ Rasxodingiz rahbar tomonidan rad etildi.")
+    except Exception: pass
 
 @bot.message_handler(func=lambda m: m.text == "📦 Buyurtmalar")
 def my_orders(message):
