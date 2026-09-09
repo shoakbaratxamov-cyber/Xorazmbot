@@ -2677,3 +2677,142 @@ def plan_manager_selected(call):
         parse_mode="HTML",reply_markup=orqaga_menyu_yaratish())
 
 
+
+# ============================================================
+# 7-BOSQICH: RAHBAR DASHBOARD VA KENGAYTIRILGAN ANALITIKA
+# ============================================================
+
+def _float(x):
+    try:
+        return float(x or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+def _dokon_nomi(dokon_id):
+    d = dokonlar.get(str(dokon_id)) or dokonlar.get(dokon_id) or {}
+    return d.get("nomi", f"Do'kon #{dokon_id}")
+
+def _menejer_ismi(uid):
+    m = menejer_ol(uid) or menejer_ol(str(uid))
+    return (m or {}).get("ism", f"Menejer #{uid}")
+
+def rahbar_oylik_savdo_statistikasi(oy=None):
+    oy = oy or joriy_oy()
+    return [x for x in savdolar if str(x.get("sana", ""))[:7] == oy]
+
+def rahbar_dashboard_matni(oy=None):
+    oy = oy or joriy_oy()
+    rows = rahbar_oylik_savdo_statistikasi(oy)
+    jami = sum(_float(x.get("summa")) for x in rows)
+    dona = sum(int(_float(x.get("son"))) for x in rows)
+
+    mgr, kat, brand, model, store = {}, {}, {}, {}, {}
+    excel_data = None
+
+    for x in rows:
+        uid = str(x.get("manager_id"))
+        mgr[uid] = mgr.get(uid, 0) + _float(x.get("summa"))
+
+        k = str(x.get("kategoriya") or "Noma'lum")
+        kat[k] = kat.get(k, 0) + _float(x.get("summa"))
+
+        b = str(x.get("brend") or "").strip()
+        if not b:
+            b = "Noma'lum"
+            try:
+                if excel_data is None:
+                    excel_data = ombor_malumotlarini_oqish()
+                for item in excel_data.get(k, []):
+                    if item[0] == x.get("model"):
+                        b = item[4] or "Noma'lum"
+                        break
+            except Exception:
+                pass
+        brand[b] = brand.get(b, 0) + _float(x.get("summa"))
+
+        md = str(x.get("model") or "Noma'lum")
+        model[md] = model.get(md, 0) + _float(x.get("summa"))
+
+        did = str(x.get("dokon_id"))
+        store[did] = store.get(did, 0) + _float(x.get("summa"))
+
+    matn = (
+        f"📊 <b>RAHBAR DASHBOARD — {oy}</b>\n\n"
+        f"💰 Jami savdo: <b>${jami:,.0f}</b>\n"
+        f"📦 Jami mahsulot: <b>{dona:,} dona</b>\n"
+        f"🧾 Savdo soni: <b>{len(rows)}</b>\n\n"
+        f"👨‍💼 <b>Menejerlar:</b>\n"
+    )
+
+    for uid, summa in sorted(mgr.items(), key=lambda z: z[1], reverse=True):
+        matn += f"• {_menejer_ismi(uid)} — ${summa:,.0f}\n"
+
+    matn += "\n🏷 <b>Kategoriyalar:</b>\n"
+    for k, summa in sorted(kat.items(), key=lambda z: z[1], reverse=True)[:10]:
+        matn += f"• {k} — ${summa:,.0f}\n"
+
+    matn += "\n🔵 <b>Brendlar:</b>\n"
+    for b, summa in sorted(brand.items(), key=lambda z: z[1], reverse=True)[:10]:
+        matn += f"• {b} — ${summa:,.0f}\n"
+
+    matn += "\n📦 <b>Top modellar:</b>\n"
+    for md, summa in sorted(model.items(), key=lambda z: z[1], reverse=True)[:10]:
+        matn += f"• {md} — ${summa:,.0f}\n"
+
+    matn += "\n🏪 <b>Top do'konlar:</b>\n"
+    for did, summa in sorted(store.items(), key=lambda z: z[1], reverse=True)[:10]:
+        matn += f"• {_dokon_nomi(did)} — ${summa:,.0f}\n"
+
+    return matn
+
+@bot.message_handler(func=lambda m: m.text == "📈 Savdo analitikasi" and rahbar_mi(m.from_user.id))
+def rahbar_dashboard(message):
+    bot.send_message(
+        message.chat.id,
+        rahbar_dashboard_matni(),
+        parse_mode="HTML",
+        reply_markup=rahbar_menu()
+    )
+
+@bot.message_handler(func=lambda m: m.text == "🏆 Menejerlar reytingi" and rahbar_mi(m.from_user.id))
+def rahbar_menejer_reytingi_yangi(message):
+    oy = joriy_oy()
+    natija = []
+
+    for uid, m in menedjerlar.items():
+        if m.get("status") != "tasdiqlangan":
+            continue
+        plan = plan_olish(uid, oy)
+        savdo = menejer_oylik_savdosi(uid, oy)
+        foiz = (savdo / plan * 100) if plan > 0 else 0
+        natija.append((foiz, savdo, plan, m.get("ism", "Noma'lum")))
+
+    natija.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+    if not natija:
+        bot.send_message(message.chat.id, "Hozircha tasdiqlangan menejer yo'q.")
+        return
+
+    matn = f"🏆 <b>MENEJERLAR REYTINGI — {oy}</b>\n\n"
+    for i, (foiz, savdo, plan, ism) in enumerate(natija, 1):
+        belgi = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "▪️"
+        matn += (
+            f"{belgi} <b>{i}. {ism}</b>\n"
+            f"   🎯 Plan: ${plan:,.0f}\n"
+            f"   📊 Savdo: ${savdo:,.0f}\n"
+            f"   📈 Bajarilish: <b>{foiz:.1f}%</b>\n\n"
+        )
+
+    bot.send_message(message.chat.id, matn, parse_mode="HTML", reply_markup=rahbar_menu())
+
+@bot.message_handler(commands=["dashboard"])
+def dashboard_command(message):
+    if not rahbar_mi(message.from_user.id):
+        bot.send_message(message.chat.id, "❌ Bu bo'lim faqat rahbarlar uchun.")
+        return
+    bot.send_message(
+        message.chat.id,
+        rahbar_dashboard_matni(),
+        parse_mode="HTML",
+        reply_markup=rahbar_menu()
+    )
