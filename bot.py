@@ -591,6 +591,104 @@ def rahbar_menu():
     kb.add(types.KeyboardButton("🔄 Ombor sonini yangilash"))
     return kb
 
+
+# ---------------- DO'KON QO'SHISH HOLATI ----------------
+# Bu handler ataylab yuqorida turadi: eski/legacy text handlerlar do'kon
+# qo'shish jarayonidagi xabarlarni ushlab qolmasligi kerak.
+@bot.message_handler(content_types=["text"], func=lambda m: m.from_user.id in dokon_holati and rahbar_mi(m.from_user.id))
+def store_registration(message):
+    uid = message.from_user.id
+    st = dokon_holati.get(uid)
+    if not st:
+        return
+
+    text = (message.text or "").strip()
+
+    # Navigatsiya har bir bosqichda ishlaydi.
+    if text == "🏠 Bosh menyu":
+        dokon_holati.pop(uid, None)
+        bot.send_message(message.chat.id, "🏠 Bosh menyu", reply_markup=rahbar_menu())
+        return
+
+    if text == "🔙 Orqaga":
+        bosqich = st.get("bosqich")
+        if bosqich == "nomi":
+            dokon_holati.pop(uid, None)
+            bot.send_message(message.chat.id, "🏪 Do'konlar boshqaruvi", reply_markup=rahbar_menu())
+        elif bosqich == "telefon":
+            st["bosqich"] = "nomi"
+            bot.send_message(message.chat.id, "🏪 Do'kon nomini kiriting:", reply_markup=orqaga_menyu_yaratish())
+        elif bosqich == "manzil":
+            st["bosqich"] = "telefon"
+            bot.send_message(message.chat.id, "📱 Do'kon telefon raqamini kiriting:", reply_markup=orqaga_menyu_yaratish())
+        else:
+            dokon_holati.pop(uid, None)
+            bot.send_message(message.chat.id, "🏠 Bosh menyu", reply_markup=rahbar_menu())
+        return
+
+    bosqich = st.get("bosqich")
+
+    if bosqich == "nomi":
+        if len(text) < 2:
+            bot.send_message(message.chat.id, "❌ Do'kon nomi kamida 2 ta belgidan iborat bo'lsin.", reply_markup=orqaga_menyu_yaratish())
+            return
+        st["nomi"] = text
+        st["bosqich"] = "telefon"
+        bot.send_message(message.chat.id,
+                         f"✅ Do'kon nomi: <b>{text}</b>\n\n📱 Do'kon telefon raqamini kiriting:",
+                         parse_mode="HTML", reply_markup=orqaga_menyu_yaratish())
+        return
+
+    if bosqich == "telefon":
+        if len(text) < 5:
+            bot.send_message(message.chat.id, "❌ Telefon raqamini to'g'ri kiriting.", reply_markup=orqaga_menyu_yaratish())
+            return
+        st["telefon"] = text
+        st["bosqich"] = "manzil"
+        bot.send_message(message.chat.id,
+                         "📍 Do'kon manzilini kiriting:",
+                         reply_markup=orqaga_menyu_yaratish())
+        return
+
+    if bosqich == "manzil":
+        if len(text) < 2:
+            bot.send_message(message.chat.id, "❌ Manzilni kiriting.", reply_markup=orqaga_menyu_yaratish())
+            return
+        st["manzil"] = text
+
+        # ID ni mavjud IDlar asosida xavfsiz hosil qilamiz.
+        nums = []
+        for sid in dokonlar.keys():
+            try:
+                nums.append(int(str(sid).split("-")[-1]))
+            except Exception:
+                pass
+        next_num = max(nums, default=0) + 1
+        sid = f"DOK-{next_num:04d}"
+
+        dokonlar[sid] = {
+            "id": sid,
+            "nomi": st["nomi"],
+            "telefon": st["telefon"],
+            "manzil": st["manzil"],
+            "manager_id": None,
+            "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        if not json_saqlash(DOKONLAR_FAYLI, dokonlar):
+            bot.send_message(message.chat.id, "❌ Do'konni saqlashda xatolik yuz berdi. Qaytadan urinib ko'ring.", reply_markup=rahbar_menu())
+            return
+
+        nomi = st["nomi"]
+        dokon_holati.pop(uid, None)
+        bot.send_message(message.chat.id,
+                         f"✅ <b>Do'kon muvaffaqiyatli qo'shildi!</b>\n\n🏪 {nomi}\n📱 {st['telefon']}\n📍 {st['manzil']}\n🆔 {sid}\n\nEndi bu do'konga tasdiqlangan menejerni biriktirishingiz mumkin.",
+                         parse_mode="HTML", reply_markup=rahbar_menu())
+        return
+
+    # Noma'lum state bo'lsa, uni tozalaymiz.
+    dokon_holati.pop(uid, None)
+    bot.send_message(message.chat.id, "⚠️ Jarayon holati topilmadi. Do'kon qo'shishni qaytadan boshlang.", reply_markup=rahbar_menu())
+
 def menejer_royxatdan_otishni_boshlash(chat_id):
     uid = chat_id
     mavjud = menejer_ol(uid)
@@ -793,7 +891,7 @@ def store_add_start(call):
     if not rahbar_mi(call.from_user.id): return
     dokon_holati[call.from_user.id] = {"bosqich":"nomi"}
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "🏪 Do'kon nomini kiriting:", reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(call.message.chat.id, "🏪 Do'kon nomini kiriting:", reply_markup=orqaga_menyu_yaratish())
 
 @bot.callback_query_handler(func=lambda c: c.data == "dokon_list")
 def store_list(call):
@@ -2080,45 +2178,6 @@ def yangi_sonni_qabul_qilish(message):
 
 
 
-if __name__ == "__main__":
-    hisoblagichni_tiklash()
-    threading.Thread(target=avtomatik_saqlash_oqimi, daemon=True).start()
-    log.info("Menejer/Rahbar bot ishga tushdi...")
-    while True:
-        try:
-            bot.infinity_polling(timeout=30, long_polling_timeout=30)
-        except Exception:
-            log.exception("Polling to'xtadi, 5 soniyadan keyin qayta urinamiz...")
-            import time
-            time.sleep(5)
-@bot.message_handler(content_types=["text"], func=lambda m: m.from_user.id in dokon_holati and rahbar_mi(m.from_user.id))
-def store_registration(message):
-    uid = message.from_user.id
-    st = dokon_holati.get(uid)
-    if not st: return
-    text = (message.text or "").strip()
-    if text in ("🏠 Bosh menyu","🔙 Orqaga"):
-        dokon_holati.pop(uid,None); bot.send_message(message.chat.id,"🏠",reply_markup=rahbar_menu()); return
-    if st["bosqich"] == "nomi":
-        if len(text)<2: bot.send_message(message.chat.id,"Do'kon nomini kiriting."); return
-        st["nomi"]=text; st["bosqich"]="telefon"
-        bot.send_message(message.chat.id,"📱 Do'kon telefon raqamini kiriting:")
-    elif st["bosqich"] == "telefon":
-        st["telefon"]=text; st["bosqich"]="manzil"
-        bot.send_message(message.chat.id,"📍 Do'kon manzilini kiriting:")
-    elif st["bosqich"] == "manzil":
-        st["manzil"]=text
-        sid = "DOK-" + str(len(dokonlar)+1).zfill(4)
-        while sid in dokonlar:
-            sid = "DOK-" + str(int(sid.split("-")[1])+1).zfill(4)
-        dokonlar[sid] = {
-            "id":sid, "nomi":st["nomi"], "telefon":st["telefon"],
-            "manzil":st["manzil"], "manager_id":None,
-            "sana":datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        json_saqlash(DOKONLAR_FAYLI,dokonlar)
-        dokon_holati.pop(uid,None)
-        bot.send_message(message.chat.id,f"✅ Do'kon qo'shildi: {st['nomi']}",reply_markup=rahbar_menu())
 
 # ---------------- SAVDO KIRITISH ----------------
 @bot.message_handler(func=lambda m: m.text == "🛒 Savdo kiritish")
@@ -4800,3 +4859,16 @@ def final_test_command(message):
         "🧪 <b>FINAL TEST</b>\n\n" + final_test_natija(),
         parse_mode="HTML"
     )
+
+
+if __name__ == "__main__":
+    hisoblagichni_tiklash()
+    threading.Thread(target=avtomatik_saqlash_oqimi, daemon=True).start()
+    log.info("Menejer/Rahbar bot ishga tushdi...")
+    while True:
+        try:
+            bot.infinity_polling(timeout=30, long_polling_timeout=30)
+        except Exception:
+            log.exception("Polling to'xtadi, 5 soniyadan keyin qayta urinamiz...")
+            import time
+            time.sleep(5)
