@@ -848,8 +848,6 @@ def plan_value_received(message):
         bot.send_message(int(mid),f"🎯 Sizga {oy} oyi uchun yangi plan belgilandi: ${value:,.0f}")
     except Exception: pass
 
-@bot.message_handler(func=lambda m: m.text == "💰 Qarzdorlik" and rahbar_mi(m.from_user.id))
-def debt_admin(message): bot.send_message(message.chat.id,"💰 Qarzdorlik moduli keyingi bosqichda ulanadi.")
 
 @bot.message_handler(func=lambda m: m.text == "💸 Rasxodlar" and rahbar_mi(m.from_user.id))
 def expense_admin(message): bot.send_message(message.chat.id,"💸 Rasxodlar moduli keyingi bosqichda ulanadi.")
@@ -2239,9 +2237,227 @@ def my_plan(message):
         f"💰 Qolgan: ${qolgan:,.0f}",
         parse_mode="HTML")
 
-@bot.message_handler(func=lambda m: m.text == "💰 Qarzdorlik")
+
+# ============================================================
+# 5-BOSQICH: QARZDORLIK TIZIMI
+# Har bir do'kon bo'yicha qarz va to'lovlar alohida tarix sifatida saqlanadi.
+# Menejer faqat o'ziga biriktirilgan do'konlarni ko'radi.
+# Rahbar barcha do'konlar va menejerlar bo'yicha umumiy qarzdorlikni ko'radi.
+# ============================================================
+
+QARZDORLIK_FAYLI = "qarzdorlik.json"
+qarzdorlik = json_yukla(QARZDORLIK_FAYLI, [])
+qarz_holati = {}
+
+def qarz_saqlash():
+    json_saqlash(QARZDORLIK_FAYLI, qarzdorlik)
+
+def qarz_balansi(store_id):
+    """Do'konning joriy qarzi = qarz yozuvlari - to'lovlar."""
+    balans = 0.0
+    for x in qarzdorlik:
+        if str(x.get("store_id")) != str(store_id):
+            continue
+        summa = float(x.get("summa", 0) or 0)
+        if x.get("tur") == "qarz":
+            balans += summa
+        elif x.get("tur") == "tolov":
+            balans -= summa
+    return balans
+
+def qarz_qoshish(store_id, manager_id, summa, tur, izoh=""):
+    qarzdorlik.append({
+        "id": len(qarzdorlik) + 1,
+        "store_id": str(store_id),
+        "manager_id": int(manager_id),
+        "tur": tur,
+        "summa": float(summa),
+        "izoh": izoh,
+        "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    qarz_saqlash()
+
+def qarz_store_nomi(store_id):
+    d = dokonlar.get(str(store_id), {})
+    return d.get("nomi", f"Do'kon #{store_id}")
+
+def qarz_manager_store_ids(uid):
+    return my_store_ids(uid)
+
+def qarz_menu_keyboard(store_id):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("➕ Qarz qo'shish", callback_data=f"qarz_add:{store_id}"),
+        types.InlineKeyboardButton("💵 To'lov kiritish", callback_data=f"tolov_add:{store_id}")
+    )
+    kb.add(types.InlineKeyboardButton("📜 Tarix", callback_data=f"qarz_tarix:{store_id}"))
+    return kb
+
+def qarz_dokonlar_xabari(chat_id, uid, rahbar=False):
+    ids = list(dokonlar.keys()) if rahbar else my_store_ids(uid)
+    if not ids:
+        bot.send_message(chat_id, "🏪 Hozircha do'konlar mavjud emas.")
+        return
+
+    jami = 0
+    matn = "💰 <b>Qarzdorlik</b>\n\n"
+    for sid in ids:
+        balans = qarz_balansi(sid)
+        jami += balans
+        d = dokonlar.get(str(sid), {})
+        nomi = d.get("nomi", f"Do'kon #{sid}")
+        belgi = "🔴" if balans > 0 else ("🟢" if balans == 0 else "🔵")
+        matn += f"{belgi} <b>{nomi}</b>\n   Qarzdorlik: ${balans:,.0f}\n\n"
+
+    matn += f"<b>Jami: ${jami:,.0f}</b>"
+    bot.send_message(chat_id, matn, parse_mode="HTML")
+
+    # Menejer uchun do'konni tanlash; rahbar uchun ham barcha do'konlar.
+    kb = types.InlineKeyboardMarkup()
+    for sid in ids:
+        d = dokonlar.get(str(sid), {})
+        kb.add(types.InlineKeyboardButton(
+            f"{d.get('nomi') or ('Dokon #' + str(sid))} — ${qarz_balansi(sid):,.0f}",
+            callback_data=f"qarz_store:{sid}"
+        ))
+    bot.send_message(chat_id, "Do'konni tanlang:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: m.text == "💰 Qarzdorlik" and menejer_tasdiqlangan(m.from_user.id))
 def my_debt(message):
-    bot.send_message(message.chat.id,"💰 Qarzdorlik moduli keyingi bosqichda ulanadi.")
+    qarz_dokonlar_xabari(message.chat.id, message.from_user.id, rahbar=False)
+
+@bot.message_handler(func=lambda m: m.text == "💰 Qarzdorlik" and rahbar_mi(m.from_user.id))
+def debt_admin(message):
+    qarz_dokonlar_xabari(message.chat.id, message.from_user.id, rahbar=True)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("qarz_store:"))
+def qarz_store_selected(call):
+    uid = call.from_user.id
+    sid = call.data.split(":", 1)[1]
+    if rahbar_mi(uid):
+        ruxsat = sid in dokonlar
+    else:
+        ruxsat = menejer_tasdiqlangan(uid) and sid in my_store_ids(uid)
+    if not ruxsat:
+        bot.answer_callback_query(call.id, "Bu do'konga ruxsatingiz yo'q.", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    nomi = qarz_store_nomi(sid)
+    balans = qarz_balansi(sid)
+    bot.send_message(
+        call.message.chat.id,
+        f"🏪 <b>{nomi}</b>\n\n💰 Joriy qarz: <b>${balans:,.0f}</b>",
+        parse_mode="HTML",
+        reply_markup=qarz_menu_keyboard(sid)
+    )
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("qarz_add:"))
+def qarz_add_start(call):
+    sid = call.data.split(":", 1)[1]
+    uid = call.from_user.id
+    if not ((rahbar_mi(uid) and sid in dokonlar) or
+            (menejer_tasdiqlangan(uid) and sid in my_store_ids(uid))):
+        bot.answer_callback_query(call.id, "Ruxsat yo'q.", show_alert=True)
+        return
+    qarz_holati[uid] = {"bosqich": "summa", "store_id": sid, "tur": "qarz"}
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,
+        f"➕ <b>{qarz_store_nomi(sid)}</b>\n\n"
+        "Qarz summasini kiriting.\nMasalan: 15000000",
+        parse_mode="HTML", reply_markup=orqaga_menyu_yaratish())
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("tolov_add:"))
+def tolov_add_start(call):
+    sid = call.data.split(":", 1)[1]
+    uid = call.from_user.id
+    if not ((rahbar_mi(uid) and sid in dokonlar) or
+            (menejer_tasdiqlangan(uid) and sid in my_store_ids(uid))):
+        bot.answer_callback_query(call.id, "Ruxsat yo'q.", show_alert=True)
+        return
+    qarz_holati[uid] = {"bosqich": "summa", "store_id": sid, "tur": "tolov"}
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,
+        f"💵 <b>{qarz_store_nomi(sid)}</b>\n\n"
+        "To'lov summasini kiriting.\nMasalan: 5000000",
+        parse_mode="HTML", reply_markup=orqaga_menyu_yaratish())
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("qarz_tarix:"))
+def qarz_history(call):
+    sid = call.data.split(":", 1)[1]
+    uid = call.from_user.id
+    if not ((rahbar_mi(uid) and sid in dokonlar) or
+            (menejer_tasdiqlangan(uid) and sid in my_store_ids(uid))):
+        bot.answer_callback_query(call.id, "Ruxsat yo'q.", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    yozuvlar = [x for x in qarzdorlik if str(x.get("store_id")) == str(sid)]
+    if not yozuvlar:
+        bot.send_message(call.message.chat.id, "📜 Bu do'kon bo'yicha tarix hali yo'q.")
+        return
+    matn = f"📜 <b>{qarz_store_nomi(sid)} — qarz tarixi</b>\n\n"
+    for x in reversed(yozuvlar[-30:]):
+        belgi = "➕ Qarz" if x.get("tur") == "qarz" else "➖ To'lov"
+        matn += f"{belgi}: ${float(x.get('summa',0)):,.0f}\n"
+        if x.get("izoh"):
+            matn += f"   📝 {x['izoh']}\n"
+        matn += f"   🕐 {x.get('sana','')}\n\n"
+    matn += f"💰 <b>Qoldiq qarz: ${qarz_balansi(sid):,.0f}</b>"
+    bot.send_message(call.message.chat.id, matn, parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.from_user.id in qarz_holati)
+def qarz_input(message):
+    uid = message.from_user.id
+    st = qarz_holati.get(uid)
+    if not st:
+        return
+    if st.get("bosqich") == "izoh":
+        izoh = (message.text or "").strip()
+        if izoh == "-":
+            izoh = ""
+        qarz_qoshish(st["store_id"], uid, st["summa"], st["tur"], izoh)
+        qarz_holati.pop(uid, None)
+        tur_matni = "➕ Qarz" if st["tur"] == "qarz" else "➖ To'lov"
+        bot.send_message(message.chat.id,
+            f"✅ {tur_matni} saqlandi: ${st['summa']:,.0f}\n"
+            f"🏪 {qarz_store_nomi(st['store_id'])}\n"
+            f"💰 Yangi qoldiq: ${qarz_balansi(st['store_id']):,.0f}",
+            reply_markup=bosh_menyu_yaratish(uid))
+        return
+
+    raw = (message.text or "").strip().replace(" ", "").replace(",", "").replace("$", "")
+    try:
+        summa = float(raw)
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Summani faqat raqam bilan kiriting. Masalan: 15000000")
+        return
+    if summa <= 0:
+        bot.send_message(message.chat.id, "❌ Summa 0 dan katta bo'lishi kerak.")
+        return
+
+    sid = st["store_id"]
+    # To'lov mavjud qarzdan oshib ketmasin.
+    if st["tur"] == "tolov":
+        balans = qarz_balansi(sid)
+        if balans <= 0:
+            bot.send_message(message.chat.id, "🟢 Bu do'konning hozir qarzi yo'q.")
+            qarz_holati.pop(uid, None)
+            return
+        if summa > balans:
+            bot.send_message(message.chat.id,
+                f"❌ To'lov qarzdan katta bo'lishi mumkin emas.\n"
+                f"Joriy qarz: ${balans:,.0f}")
+            return
+
+    qarz_holati[uid] = {
+        "bosqich": "izoh",
+        "store_id": sid,
+        "tur": st["tur"],
+        "summa": summa
+    }
+    bot.send_message(message.chat.id,
+        "📝 Izoh yozing yoki '-' yuboring:",
+        reply_markup=orqaga_menyu_yaratish())
+
 
 @bot.message_handler(func=lambda m: m.text == "💸 Rasxod")
 def my_expense(message):
