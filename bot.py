@@ -55,6 +55,14 @@ for _id in _qoshimcha_adminlar.split(","):
         ADMIN_IDLAR.add(int(_id))
 
 
+# Rahbarlar ro'yxati. RAHBAR_IDS berilmasa, mavjud ADMIN_IDS rahbar hisoblanadi.
+RAHBAR_IDS = set(ADMIN_IDLAR)
+_qoshimcha_rahbarlar = os.getenv("RAHBAR_IDS", "")
+for _id in _qoshimcha_rahbarlar.split(","):
+    _id = _id.strip()
+    if _id.isdigit():
+        RAHBAR_IDS.add(int(_id))
+
 def admin_mi(user_id):
     """Foydalanuvchi admin/menejerlardan biri ekanini tekshiradi."""
     try:
@@ -4726,3 +4734,104 @@ try:
     bildirishnoma_scheduler_start()
 except Exception:
     log.exception("Bildirishnoma scheduler ishga tushmadi")
+
+# ============================================================
+# 16-BOSQICH: ROLLAR + XAVFSIZLIK AUDITI
+# Rahbar va menejer huquqlari qat'iy ajratiladi.
+# Menejer faqat tasdiqlangan bo'lsa ishlaydi.
+# ============================================================
+
+def foydalanuvchi_rahbar_mi(user_id):
+    try:
+        return int(user_id) in RAHBAR_IDS
+    except (TypeError, ValueError):
+        return False
+
+def foydalanuvchi_menejer_mi(user_id):
+    try:
+        info = menejer_ol(user_id)
+        return bool(info and info.get("status") == "tasdiqlangan")
+    except Exception:
+        return False
+
+def xavfsiz_dokon_tekshir(uid, did):
+    if foydalanuvchi_rahbar_mi(uid):
+        return True
+    return str(did) in {str(x[0]) for x in menejer_dokonlari(uid)}
+
+def xavfsiz_menejer_tekshir(uid):
+    return foydalanuvchi_menejer_mi(uid) or foydalanuvchi_rahbar_mi(uid)
+
+def xavfsizlik_auditi():
+    """
+    Lokal konfiguratsiya auditi:
+    - BOT_TOKEN mavjudligi
+    - Excel mavjudligi
+    - rahbarlar mavjudligi
+    - JSON fayllarining buzilmaganligi
+    """
+    natija = []
+
+    if BOT_TOKEN:
+        natija.append("✅ BOT_TOKEN mavjud")
+    else:
+        natija.append("❌ BOT_TOKEN mavjud emas")
+
+    if os.path.exists(EXCEL_FILE):
+        natija.append("✅ Baza.xlsx mavjud")
+    else:
+        natija.append("❌ Baza.xlsx topilmadi")
+
+    if RAHBAR_IDS:
+        natija.append(f"✅ Rahbarlar: {len(RAHBAR_IDS)} ta")
+    else:
+        natija.append("❌ Rahbarlar ro'yxati bo'sh")
+
+    json_fayllar = [
+        MENEDJERLAR_FAYLI,
+        DOKONLAR_FAYLI,
+        SAVDOLAR_FAYLI,
+        PLANLAR_FAYLI,
+        QARZDORLIK_FAYLI,
+        RASXODLAR_FAYLI,
+        MENEJER_BUYURTMALAR_FAYLI,
+        VAZIFALAR_FAYLI,
+        HISOBOTLAR_FAYLI,
+    ]
+
+    for fayl in json_fayllar:
+        if not os.path.exists(fayl):
+            continue
+        try:
+            with open(fayl, "r", encoding="utf-8") as f:
+                json.load(f)
+        except Exception:
+            natija.append(f"❌ JSON buzilgan: {fayl}")
+
+    if not any(x.startswith("❌ JSON") for x in natija):
+        natija.append("✅ JSON ma'lumotlar tekshirildi")
+
+    return natija
+
+@bot.message_handler(commands=["security"])
+def security_command(message):
+    if not foydalanuvchi_rahbar_mi(message.from_user.id):
+        return
+
+    matn = "🔐 <b>XAVFSIZLIK AUDITI</b>\n\n"
+    matn += "\n".join(xavfsizlik_auditi())
+    matn += (
+        "\n\n🛡 <b>Huquqlar:</b>\n"
+        "• Rahbar — barcha menejer/do'kon ma'lumotlari\n"
+        "• Menejer — faqat o'ziga biriktirilgan do'konlar\n"
+        "• Tasdiqlanmagan menejer — tizim funksiyalariga kira olmaydi"
+    )
+    bot.send_message(message.chat.id, matn, parse_mode="HTML")
+
+# Bosh menyuni chaqiruvchi xavfsiz yordamchi.
+def xavfsiz_bosh_menyu(user_id):
+    if foydalanuvchi_rahbar_mi(user_id):
+        return rahbar_menu()
+    if foydalanuvchi_menejer_mi(user_id):
+        return menejer_menu()
+    return None
