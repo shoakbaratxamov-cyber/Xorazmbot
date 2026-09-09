@@ -3609,3 +3609,168 @@ def kpi_command(message):
         parse_mode="HTML",
         reply_markup=rahbar_menu()
     )
+
+# ============================================================
+# 11-BOSQICH: RAHBAR ANALITIK DASHBOARD 2.0
+# Bitta markazdan: savdo, menejer, do'kon, kategoriya, brend,
+# model, qarzdorlik va tasdiqlangan rasxodlar.
+# ============================================================
+
+def dashboard_savdolar(oy=None):
+    oy = oy or joriy_oy()
+    rows = [x for x in savdolar if str(x.get("sana", "")).startswith(oy)]
+    jami = sum(_float(x.get("total", x.get("summa", 0))) for x in rows)
+    qty = sum(int(_float(x.get("qty", x.get("son", 0)))) for x in rows)
+    return rows, jami, qty
+
+def dashboard_qarz_jami():
+    jami = 0
+    for x in qarzdorlik:
+        if x.get("tur") == "qarz":
+            jami += _float(x.get("summa"))
+        elif x.get("tur") == "tolov":
+            jami -= _float(x.get("summa"))
+    return max(jami, 0)
+
+def dashboard_rasxod_jami(oy=None):
+    oy = oy or joriy_oy()
+    jami = 0
+    for x in rasxodlar:
+        if x.get("status") != "tasdiqlangan":
+            continue
+        if not str(x.get("sana", "")).startswith(oy):
+            continue
+        jami += _float(x.get("summa"))
+    return jami
+
+def dashboard_guruh(rows, key_func):
+    result = {}
+    for row in rows:
+        key = key_func(row) or "Noma'lum"
+        result[key] = result.get(key, 0) + _float(row.get("total", row.get("summa", 0)))
+    return sorted(result.items(), key=lambda x: x[1], reverse=True)
+
+def dashboard_menejer_nomi(uid):
+    info = menejer_ol(uid)
+    return info.get("ism", str(uid)) if info else str(uid)
+
+def dashboard_dokon_nomi(did):
+    return _dokon_nomi(did)
+
+def dashboard_brand(row):
+    brand = row.get("brand") or row.get("brend")
+    if brand:
+        return str(brand)
+    model = str(row.get("model", ""))
+    kat = str(row.get("category", row.get("kategoriya", "")))
+    try:
+        data = ombor_malumotlarini_oqish()
+        for x in data.get(kat, []):
+            if str(x[0]) == model:
+                # Excel tuzilmasi A=Brend, B=Kategoriya, C=Model
+                return str(x[3] if len(x) > 3 and x[3] else x[0])
+    except Exception:
+        pass
+    return "Noma'lum"
+
+def dashboard_matn(oy=None):
+    oy = oy or joriy_oy()
+    rows, savdo_jami, qty = dashboard_savdolar(oy)
+    qarz = dashboard_qarz_jami()
+    rasxod = dashboard_rasxod_jami(oy)
+    sof = savdo_jami - rasxod
+
+    matn = (
+        f"📊 <b>RAHBAR DASHBOARD</b>\n"
+        f"📅 {oy}\n\n"
+        f"💰 <b>Jami savdo:</b> ${savdo_jami:,.0f}\n"
+        f"📦 <b>Sotilgan dona:</b> {qty:,}\n"
+        f"🧾 <b>Savdo operatsiyalari:</b> {len(rows):,} ta\n"
+        f"💳 <b>Jami qarzdorlik:</b> ${qarz:,.0f}\n"
+        f"💸 <b>Tasdiqlangan rasxod:</b> ${rasxod:,.0f}\n"
+        f"📈 <b>Savdo − rasxod:</b> ${sof:,.0f}\n"
+    )
+
+    if rows:
+        matn += "\n🏆 <b>TOP 5 MENEJER</b>\n"
+        for i, (name, total) in enumerate(
+            dashboard_guruh(rows, lambda r: dashboard_menejer_nomi(r.get("manager_id")))[:5], 1
+        ):
+            matn += f"{i}. {name} — ${total:,.0f}\n"
+
+        matn += "\n🏪 <b>TOP 5 DO'KON</b>\n"
+        for i, (name, total) in enumerate(
+            dashboard_guruh(rows, lambda r: dashboard_dokon_nomi(r.get("store_id")))[:5], 1
+        ):
+            matn += f"{i}. {name} — ${total:,.0f}\n"
+
+    return matn
+
+@bot.message_handler(func=lambda m: m.text == "📊 Umumiy savdo" and rahbar_mi(m.from_user.id))
+def rahbar_umumiy_savdo_dashboard(message):
+    bot.send_message(
+        message.chat.id,
+        dashboard_matn(),
+        parse_mode="HTML",
+        reply_markup=rahbar_menu()
+    )
+
+@bot.message_handler(func=lambda m: m.text == "📈 Savdo analitikasi" and rahbar_mi(m.from_user.id))
+def rahbar_analitika_menu(message):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("👨‍💼 Menejer", callback_data="dash:manager"),
+        types.InlineKeyboardButton("🏪 Do'kon", callback_data="dash:store")
+    )
+    kb.add(
+        types.InlineKeyboardButton("🏷 Brend", callback_data="dash:brand"),
+        types.InlineKeyboardButton("📂 Kategoriya", callback_data="dash:category")
+    )
+    kb.add(types.InlineKeyboardButton("📦 Model", callback_data="dash:model"))
+    bot.send_message(
+        message.chat.id,
+        "📈 <b>Savdo analitikasi</b>\nQaysi kesim kerak?",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("dash:"))
+def rahbar_dashboard_taqsimot(call):
+    bot.answer_callback_query(call.id)
+    if not rahbar_mi(call.from_user.id):
+        return
+
+    tur = call.data.split(":", 1)[1]
+    rows, jami, qty = dashboard_savdolar()
+    if not rows:
+        bot.send_message(call.message.chat.id, "Joriy oyda savdo ma'lumotlari yo'q.")
+        return
+
+    if tur == "manager":
+        title = "👨‍💼 MENEJERLAR"
+        groups = dashboard_guruh(rows, lambda r: dashboard_menejer_nomi(r.get("manager_id")))
+    elif tur == "store":
+        title = "🏪 DO'KONLAR"
+        groups = dashboard_guruh(rows, lambda r: dashboard_dokon_nomi(r.get("store_id")))
+    elif tur == "brand":
+        title = "🏷 BRENDLAR"
+        groups = dashboard_guruh(rows, dashboard_brand)
+    elif tur == "category":
+        title = "📂 KATEGORIYALAR"
+        groups = dashboard_guruh(rows, lambda r: r.get("category", r.get("kategoriya", "Noma'lum")))
+    else:
+        title = "📦 MODELLAR"
+        groups = dashboard_guruh(rows, lambda r: r.get("model", "Noma'lum"))
+
+    matn = f"📊 <b>{title}</b> — {joriy_oy()}\n\n"
+    for i, (name, total) in enumerate(groups[:30], 1):
+        ulush = (total / jami * 100) if jami else 0
+        matn += f"{i}. {name} — ${total:,.0f} ({ulush:.1f}%)\n"
+
+    bot.send_message(call.message.chat.id, matn, parse_mode="HTML")
+
+@bot.message_handler(commands=["dashboard"])
+def dashboard_command_2(message):
+    if not rahbar_mi(message.from_user.id):
+        return
+    bot.send_message(message.chat.id, dashboard_matn(), parse_mode="HTML", reply_markup=rahbar_menu())
