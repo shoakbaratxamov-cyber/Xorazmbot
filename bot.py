@@ -2816,3 +2816,330 @@ def dashboard_command(message):
         parse_mode="HTML",
         reply_markup=rahbar_menu()
     )
+
+# ============================================================
+# 8-BOSQICH: MENEJER BUYURTMALARI
+# Faqat tasdiqlangan menejerlar buyurtma yaratadi.
+# Buyurtma do'kon + menejer + mahsulot + miqdor bilan saqlanadi.
+# ============================================================
+
+MENEJER_BUYURTMALAR_FAYLI = "menedjer_buyurtmalar.json"
+menejer_buyurtma_holati = {}
+menejer_buyurtma_savat = {}
+
+def menejer_buyurtmalarini_yuklash():
+    if not os.path.exists(MENEJER_BUYURTMALAR_FAYLI):
+        return []
+    try:
+        with open(MENEJER_BUYURTMALAR_FAYLI, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        log.exception("Menejer buyurtmalarini yuklashda xatolik")
+        return []
+
+def menejer_buyurtmalarini_saqlash(data):
+    tmp = MENEJER_BUYURTMALAR_FAYLI + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, MENEJER_BUYURTMALAR_FAYLI)
+
+def menejer_buyurtma_raqami():
+    data = menejer_buyurtmalarini_yuklash()
+    eng_katta = 0
+    for x in data:
+        try:
+            eng_katta = max(eng_katta, int(x.get("id", 0)))
+        except Exception:
+            pass
+    return eng_katta + 1
+
+def menejer_buyurtma_savatcha_matni(user_id):
+    items = menejer_buyurtma_savat.get(user_id, [])
+    if not items:
+        return "🛒 Buyurtma savati bo'sh.", 0
+
+    jami = 0
+    matn = "🛒 <b>Buyurtma savati</b>\n\n"
+    for i, item in enumerate(items, 1):
+        summa = _float(item["narx"]) * int(item["son"])
+        jami += summa
+        matn += (
+            f"{i}. {item['model']}\n"
+            f"   {item['son']} dona × ${_float(item['narx']):,.0f} = ${summa:,.0f}\n"
+        )
+    matn += f"\n💰 <b>Jami: ${jami:,.0f}</b>"
+    return matn, jami
+
+@bot.message_handler(func=lambda m: m.text == "📦 Buyurtmalar" and menejer_mi(m.from_user.id))
+def menejer_buyurtmalar_menu(message):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("➕ Buyurtma yaratish", "📋 Mening buyurtmalarim")
+    kb.add("🏠 Bosh menyu")
+    bot.send_message(message.chat.id, "📦 Buyurtmalar bo'limi:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: m.text == "➕ Buyurtma yaratish" and menejer_mi(m.from_user.id))
+def menejer_buyurtma_boshlash(message):
+    stores = menejer_dokonlari(message.from_user.id)
+    if not stores:
+        bot.send_message(message.chat.id, "❌ Sizga hali do'kon biriktirilmagan.")
+        return
+
+    kb = types.InlineKeyboardMarkup()
+    for did, d in stores:
+        kb.add(types.InlineKeyboardButton(
+            f"🏪 {d.get('nomi', 'Nomsiz do‘kon')}",
+            callback_data=f"mbstore:{did}"
+        ))
+    bot.send_message(message.chat.id, "Buyurtma qaysi do'kon uchun?", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mbstore:"))
+def menejer_buyurtma_dokon_tanlash(call):
+    bot.answer_callback_query(call.id)
+    if not menejer_mi(call.from_user.id):
+        return
+    did = call.data.split(":", 1)[1]
+    allowed = {str(x[0]) for x in menejer_dokonlari(call.from_user.id)}
+    if str(did) not in allowed:
+        bot.send_message(call.message.chat.id, "❌ Bu do'kon sizga biriktirilmagan.")
+        return
+
+    menejer_buyurtma_savat[call.from_user.id] = []
+    menejer_buyurtma_holati[call.from_user.id] = {"dokon_id": did}
+
+    data = ombor_malumotlarini_oqish()
+    kb = types.InlineKeyboardMarkup()
+    for kat in data.keys():
+        kb.add(types.InlineKeyboardButton(kat, callback_data=f"mbkat:{kat}"))
+    bot.send_message(call.message.chat.id, "📦 Kategoriyani tanlang:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mbkat:"))
+def menejer_buyurtma_kategoriya(call):
+    bot.answer_callback_query(call.id)
+    if not menejer_mi(call.from_user.id):
+        return
+    kat = call.data.split(":", 1)[1]
+    data = ombor_malumotlarini_oqish()
+    products = [x for x in data.get(kat, []) if _float(x[1]) > 0]
+
+    if not products:
+        bot.send_message(call.message.chat.id, "Bu kategoriyada mavjud mahsulot yo'q.")
+        return
+
+    kb = types.InlineKeyboardMarkup()
+    for item in products[:50]:
+        model, son, narx = item[0], item[1], item[2]
+        kb.add(types.InlineKeyboardButton(
+            f"{model} — ${_float(narx):,.0f} ({int(_float(son))} dona)",
+            callback_data=f"mbprod:{kat}|{model}"
+        ))
+    bot.send_message(call.message.chat.id, "Modelni tanlang:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mbprod:"))
+def menejer_buyurtma_model(call):
+    bot.answer_callback_query(call.id)
+    if not menejer_mi(call.from_user.id):
+        return
+    kat, model = call.data.split(":", 1)[1].split("|", 1)
+    data = ombor_malumotlarini_oqish()
+    found = next((x for x in data.get(kat, []) if x[0] == model), None)
+    if not found:
+        bot.send_message(call.message.chat.id, "❌ Mahsulot topilmadi.")
+        return
+
+    menejer_buyurtma_holati[call.from_user.id]["bosqich"] = "son"
+    menejer_buyurtma_holati[call.from_user.id]["kategoriya"] = kat
+    menejer_buyurtma_holati[call.from_user.id]["model"] = model
+    menejer_buyurtma_holati[call.from_user.id]["mavjud"] = int(_float(found[1]))
+    menejer_buyurtma_holati[call.from_user.id]["narx"] = _float(found[2])
+
+    bot.send_message(
+        call.message.chat.id,
+        f"📦 <b>{model}</b>\n"
+        f"💰 Narx: ${_float(found[2]):,.0f}\n"
+        f"📊 Omborda: {int(_float(found[1]))} dona\n\n"
+        f"Nechta dona kerak?",
+        parse_mode="HTML"
+    )
+
+@bot.message_handler(func=lambda m: m.from_user.id in menejer_buyurtma_holati)
+def menejer_buyurtma_son_qabul(message):
+    uid = message.from_user.id
+    state = menejer_buyurtma_holati.get(uid)
+    if not state or state.get("bosqich") != "son":
+        return
+
+    txt = (message.text or "").strip()
+    if not txt.isdigit() or int(txt) <= 0:
+        bot.send_message(message.chat.id, "❌ Musbat butun son kiriting. Masalan: 5")
+        return
+
+    son = int(txt)
+    if son > state["mavjud"]:
+        bot.send_message(
+            message.chat.id,
+            f"❌ Omborda faqat {state['mavjud']} dona bor."
+        )
+        return
+
+    menejer_buyurtma_savat.setdefault(uid, []).append({
+        "kategoriya": state["kategoriya"],
+        "model": state["model"],
+        "son": son,
+        "narx": state["narx"],
+    })
+    state["bosqich"] = "yana"
+
+    matn, jami = menejer_buyurtma_savatcha_matni(uid)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("➕ Yana mahsulot", callback_data="mb_yana"))
+    kb.add(types.InlineKeyboardButton("✅ Buyurtmani yuborish", callback_data="mb_yuborish"))
+    kb.add(types.InlineKeyboardButton("🗑 Bekor qilish", callback_data="mb_bekor"))
+    bot.send_message(message.chat.id, matn, parse_mode="HTML", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data == "mb_yana")
+def menejer_buyurtma_yana(call):
+    bot.answer_callback_query(call.id)
+    if not menejer_mi(call.from_user.id):
+        return
+    data = ombor_malumotlarini_oqish()
+    kb = types.InlineKeyboardMarkup()
+    for kat in data.keys():
+        kb.add(types.InlineKeyboardButton(kat, callback_data=f"mbkat:{kat}"))
+    bot.send_message(call.message.chat.id, "📦 Kategoriyani tanlang:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data == "mb_bekor")
+def menejer_buyurtma_bekor(call):
+    bot.answer_callback_query(call.id)
+    menejer_buyurtma_savat.pop(call.from_user.id, None)
+    menejer_buyurtma_holati.pop(call.from_user.id, None)
+    bot.send_message(call.message.chat.id, "❌ Buyurtma bekor qilindi.", reply_markup=menejer_menu())
+
+@bot.callback_query_handler(func=lambda c: c.data == "mb_yuborish")
+def menejer_buyurtma_yuborish(call):
+    bot.answer_callback_query(call.id)
+    uid = call.from_user.id
+    if not menejer_mi(uid):
+        return
+
+    state = menejer_buyurtma_holati.get(uid)
+    items = menejer_buyurtma_savat.get(uid, [])
+    if not state or not items:
+        bot.send_message(call.message.chat.id, "❌ Buyurtma topilmadi.")
+        return
+
+    did = str(state["dokon_id"])
+    allowed = {str(x[0]) for x in menejer_dokonlari(uid)}
+    if did not in allowed:
+        bot.send_message(call.message.chat.id, "❌ Do'kon sizga biriktirilmagan.")
+        return
+
+    jami = sum(_float(x["narx"]) * int(x["son"]) for x in items)
+    bid = menejer_buyurtma_raqami()
+    data = menejer_buyurtmalarini_yuklash()
+
+    data.append({
+        "id": bid,
+        "manager_id": uid,
+        "manager_ism": (menejer_ol(uid) or {}).get("ism", ""),
+        "dokon_id": did,
+        "dokon_nomi": _dokon_nomi(did),
+        "itemlar": items,
+        "jami_summa": jami,
+        "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "status": "yangi",
+    })
+    menejer_buyurtmalarini_saqlash(data)
+
+    matn = (
+        f"🆕 <b>Yangi menejer buyurtmasi #{bid}</b>\n\n"
+        f"👨‍💼 Menejer: {(menejer_ol(uid) or {}).get('ism', '')}\n"
+        f"🏪 Do'kon: {_dokon_nomi(did)}\n"
+        f"💰 Jami: ${jami:,.0f}\n\n"
+    )
+    for x in items:
+        matn += f"• {x['model']} — {x['son']} dona\n"
+
+    bot.send_message(call.message.chat.id, "✅ Buyurtma rahbarga yuborildi.", reply_markup=menejer_menu())
+
+    for rid in RAHBAR_IDS:
+        try:
+            kb = types.InlineKeyboardMarkup()
+            kb.add(
+                types.InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"mbok:{bid}"),
+                types.InlineKeyboardButton("❌ Bekor qilish", callback_data=f"mbno:{bid}")
+            )
+            bot.send_message(rid, matn, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            log.exception("Rahbarga menejer buyurtmasini yuborishda xatolik")
+
+    menejer_buyurtma_savat.pop(uid, None)
+    menejer_buyurtma_holati.pop(uid, None)
+
+def _menejer_buyurtmani_status(bid, status):
+    data = menejer_buyurtmalarini_yuklash()
+    for x in data:
+        if int(x.get("id", 0)) == int(bid):
+            x["status"] = status
+            x["status_vaqti"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            menejer_buyurtmalarini_saqlash(data)
+            return x
+    return None
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mbok:"))
+def menejer_buyurtma_tasdiq(call):
+    bot.answer_callback_query(call.id)
+    if not rahbar_mi(call.from_user.id):
+        return
+    bid = int(call.data.split(":", 1)[1])
+    x = _menejer_buyurtmani_status(bid, "tasdiqlandi")
+    if not x:
+        bot.send_message(call.message.chat.id, "❌ Buyurtma topilmadi.")
+        return
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+    bot.send_message(
+        int(x["manager_id"]),
+        f"✅ Buyurtma #{bid} tasdiqlandi.\n🏪 {x['dokon_nomi']}\n💰 ${_float(x['jami_summa']):,.0f}"
+    )
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mbno:"))
+def menejer_buyurtma_rad(call):
+    bot.answer_callback_query(call.id)
+    if not rahbar_mi(call.from_user.id):
+        return
+    bid = int(call.data.split(":", 1)[1])
+    x = _menejer_buyurtmani_status(bid, "bekor_qilindi")
+    if not x:
+        bot.send_message(call.message.chat.id, "❌ Buyurtma topilmadi.")
+        return
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+    bot.send_message(int(x["manager_id"]), f"❌ Buyurtma #{bid} bekor qilindi.")
+
+@bot.message_handler(func=lambda m: m.text == "📋 Mening buyurtmalarim" and menejer_mi(m.from_user.id))
+def mening_menejer_buyurtmalarim(message):
+    data = menejer_buyurtmalarini_yuklash()
+    mine = [x for x in data if str(x.get("manager_id")) == str(message.from_user.id)]
+    if not mine:
+        bot.send_message(message.chat.id, "Hozircha buyurtmalaringiz yo'q.")
+        return
+
+    statuslar = {
+        "yangi": "🕐 Yangi",
+        "tasdiqlandi": "✅ Tasdiqlandi",
+        "bekor_qilindi": "❌ Bekor qilindi",
+    }
+    matn = "📋 <b>Mening buyurtmalarim</b>\n\n"
+    for x in reversed(mine[-20:]):
+        matn += (
+            f"#{x['id']} — {statuslar.get(x.get('status'), x.get('status'))}\n"
+            f"🏪 {x.get('dokon_nomi')}\n"
+            f"💰 ${_float(x.get('jami_summa')):,.0f}\n"
+            f"🕐 {x.get('sana')}\n\n"
+        )
+    bot.send_message(message.chat.id, matn, parse_mode="HTML", reply_markup=menejer_menu())
