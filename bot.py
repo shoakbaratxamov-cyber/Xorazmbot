@@ -526,6 +526,7 @@ menedjer_holati = {}
 dokon_holati = {}
 savdo_holati = {}
 rasxod_holati = {}
+dokon_biriktirish_holati = {}
 
 def json_yukla(fayl, default):
     try:
@@ -911,16 +912,115 @@ def store_list(call):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("dokon_mgr:"))
 def store_assign_start(call):
-    if not rahbar_mi(call.from_user.id): return
-    sid = call.data.split(":",1)[1]
+    if not rahbar_mi(call.from_user.id):
+        bot.answer_callback_query(call.id, "Ruxsat yo'q", show_alert=True)
+        return
+    sid = call.data.split(":", 1)[1]
     d = dokonlar.get(sid)
-    if not d: return
-    kb = types.InlineKeyboardMarkup()
-    for uid, m in menedjerlar.items():
-        if m.get("status") == "tasdiqlangan":
-            kb.add(types.InlineKeyboardButton(m.get("ism","Noma'lum"), callback_data=f"assign:{sid}:{uid}"))
+    if not d:
+        bot.answer_callback_query(call.id, "Do'kon topilmadi", show_alert=True)
+        return
+
+    # Menejer statusini biroz tolerant tekshiramiz: eski bazalarda
+    # "tasdiqlangan", "Tasdiqlangan" yoki "approved" ko'rinishlari bo'lishi mumkin.
+    tasdiqlangan_statuslar = {"tasdiqlangan", "approved", "tasdiqlandi", "active"}
+    tasdiqlanganlar = []
+    for muid, m in menedjerlar.items():
+        status = str(m.get("status", "")).strip().casefold()
+        if status in tasdiqlangan_statuslar:
+            tasdiqlanganlar.append((str(muid), m))
+
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, f"🏪 {d.get('nomi')} uchun menejerni tanlang:", reply_markup=kb)
+
+    if not tasdiqlanganlar:
+        bot.send_message(
+            call.message.chat.id,
+            "⚠️ Hozircha tasdiqlangan menejerlar yo'q.\n\n"
+            "Avval 👨‍💼 Menejerlar bo'limidan menejer arizasini tasdiqlang.",
+            reply_markup=rahbar_menu()
+        )
+        return
+
+    # Inline tugmalar bilan tanlash. Qo'shimcha ravishda matn orqali
+    # menejer nomini yozib yuborish uchun state saqlanadi.
+    dokon_biriktirish_holati[call.from_user.id] = {"sid": sid}
+    kb = types.InlineKeyboardMarkup()
+    for uid, m in tasdiqlanganlar:
+        ism = (m.get("ism") or "Noma'lum").strip()
+        kb.add(types.InlineKeyboardButton(f"👨‍💼 {ism}", callback_data=f"assign:{sid}:{uid}"))
+
+    bot.send_message(
+        call.message.chat.id,
+        f"🏪 <b>{d.get('nomi')}</b> uchun menejerni tanlang.\n\n"
+        "👇 Quyidagi tugmadan tanlang yoki menejerning ismini yozib yuboring:",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+@bot.message_handler(
+    content_types=["text"],
+    func=lambda m: m.from_user.id in dokon_biriktirish_holati and rahbar_mi(m.from_user.id)
+)
+def store_assign_by_name(message):
+    uid = message.from_user.id
+    text = (message.text or "").strip()
+    st = dokon_biriktirish_holati.get(uid)
+    if not st:
+        return
+
+    if text == "🏠 Bosh menyu":
+        dokon_biriktirish_holati.pop(uid, None)
+        bot.send_message(message.chat.id, "🏠 Bosh menyu", reply_markup=rahbar_menu())
+        return
+
+    if text == "🔙 Orqaga":
+        dokon_biriktirish_holati.pop(uid, None)
+        bot.send_message(message.chat.id, "🏪 Do'konlar boshqaruvi", reply_markup=rahbar_menu())
+        return
+
+    sid = st.get("sid")
+    if sid not in dokonlar:
+        dokon_biriktirish_holati.pop(uid, None)
+        bot.send_message(message.chat.id, "❌ Do'kon topilmadi.", reply_markup=rahbar_menu())
+        return
+
+    qidiruv = text.casefold()
+    topilgan_uid = None
+    topilgan_ism = None
+    for mid, m in menedjerlar.items():
+        status = str(m.get("status", "")).strip().casefold()
+        if status not in {"tasdiqlangan", "approved", "tasdiqlandi", "active"}:
+            continue
+        ism = (m.get("ism") or "").strip()
+        if ism.casefold() == qidiruv:
+            topilgan_uid = str(mid)
+            topilgan_ism = ism
+            break
+
+    if not topilgan_uid:
+        bot.send_message(
+            message.chat.id,
+            "❌ Bunday ism bilan tasdiqlangan menejer topilmadi.\n\n"
+            "Menejer nomini tugmadagi kabi aniq yozing yoki yuqoridagi tugmadan tanlang.",
+            reply_markup=orqaga_menyu_yaratish()
+        )
+        return
+
+    dokonlar[sid]["manager_id"] = int(topilgan_uid)
+    json_saqlash(DOKONLAR_FAYLI, dokonlar)
+    dokon_biriktirish_holati.pop(uid, None)
+    dok = dokonlar[sid]
+
+    bot.send_message(
+        message.chat.id,
+        f"✅ <b>{dok.get('nomi')}</b> do'koni <b>{topilgan_ism}</b> menejeriga biriktirildi.",
+        parse_mode="HTML",
+        reply_markup=rahbar_menu()
+    )
+    try:
+        bot.send_message(int(topilgan_uid), f"🏪 Sizga yangi do'kon biriktirildi: {dok.get('nomi')}")
+    except Exception:
+        pass
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("assign:"))
 def store_assign(call):
@@ -930,6 +1030,7 @@ def store_assign(call):
         bot.answer_callback_query(call.id, "Ma'lumot topilmadi", show_alert=True); return
     dokonlar[sid]["manager_id"] = int(uid)
     json_saqlash(DOKONLAR_FAYLI, dokonlar)
+    dokon_biriktirish_holati.pop(call.from_user.id, None)
     bot.answer_callback_query(call.id, "Biriktirildi")
     bot.send_message(call.message.chat.id, f"✅ {dokonlar[sid]['nomi']} do'koni menejerga biriktirildi.")
     try:
