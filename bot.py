@@ -620,6 +620,28 @@ def rahbar_menu():
     kb.add(types.KeyboardButton("🎉 Aksiya"), types.KeyboardButton("📚 Katalog"))
     return kb
 
+# Rol menyusining tugmalari boshqa holat (state) handlerlaridan OLDIN
+# ro'yxatdan o'tadi. Shunda yarim qolgan eski jarayon bu tugmalarni yutib
+# yubormaydi va foydalanuvchi doim javob oladi.
+ROLE_MENU_BUTTONS = {
+    "🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod",
+    "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "💸 Rasxod", "🛒 Zakaz",
+    "🎉 Aksiya", "📚 Katalog",
+}
+
+@bot.message_handler(func=lambda m: (m.text or "").strip() in ROLE_MENU_BUTTONS)
+def asosiy_rol_menyu_router(message):
+    try:
+        # Funksiya fayl pastida aniqlangan bo'lsa ham, bot xabar qabul
+        # qilguncha dastur to'liq yuklanib bo'ladi.
+        savdo_rol_menyu_action(message)
+    except Exception:
+        log.exception("Asosiy rol menyusi ochilmadi: %s", message.text)
+        bot.send_message(
+            message.chat.id,
+            "❌ Bo'limni ochib bo'lmadi. /start yuborib qayta urinib ko'ring."
+        )
+
 
 # ---------------- DO'KON QO'SHISH HOLATI ----------------
 # Bu handler ataylab yuqorida turadi: eski/legacy text handlerlar do'kon
