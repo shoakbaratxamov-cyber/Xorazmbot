@@ -5318,14 +5318,15 @@ def savdo_rol_menyu_action(message):
         expense_admin(message) if role == "rahbar" else my_expense(message)
     elif text == "🛒 Zakaz":
         orders = menejer_buyurtmalarini_yuklash()
-        active = [x for x in orders if x.get("status") not in {"yetkazildi", "bekor_qilindi"}]
-        matn = "🛒 <b>Ombor zakazlari</b>\n\n"
+        active = [x for x in orders if isinstance(x, dict) and x.get("status") not in {"yetkazildi", "bekor_qilindi"}]
+        matn = "🛒 Ombor zakazlari\n\n"
         if not active:
             matn += "Hozircha faol zakaz yo'q."
         else:
             for x in active[-30:]:
-                matn += f"• #{x.get('id', '—')} — {x.get('store_name', 'Do\'kon')}\n  {x.get('status', 'yangi')}\n"
-        bot.send_message(message.chat.id, matn, parse_mode="HTML")
+                mijoz = x.get("store_name") or x.get("dokon_nomi") or x.get("mijoz") or "Mijoz"
+                matn += f"• #{x.get('id', '—')} — {mijoz}\n  Holati: {x.get('status', 'yangi')}\n"
+        bot.send_message(message.chat.id, matn[:4000])
     else:  # Prixod
         prixod_holati[message.from_user.id] = True
         bot.send_message(
