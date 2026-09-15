@@ -5317,15 +5317,19 @@ def savdo_rol_menyu_action(message):
     elif text == "💸 Rasxod":
         expense_admin(message) if role == "rahbar" else my_expense(message)
     elif text == "🛒 Zakaz":
-        orders = menejer_buyurtmalarini_yuklash()
-        active = [x for x in orders if isinstance(x, dict) and x.get("status") not in {"yetkazildi", "bekor_qilindi"}]
+        # Eski menejer-buyurtma fayli ayrim versiyalarda aniqlanmagan.
+        # Shu sabab zakazlar asosiy buyurtmalar.json dan o'qiladi.
+        orders = json_yukla(BUYURTMALAR_FAYLI, [])
+        active = [x for x in orders if isinstance(x, dict) and x.get("holat", x.get("status", "yangi")) not in {"yetkazildi", "bekor_qilindi", "bekor_qilingan"}]
         matn = "🛒 Ombor zakazlari\n\n"
         if not active:
             matn += "Hozircha faol zakaz yo'q."
         else:
             for x in active[-30:]:
-                mijoz = x.get("store_name") or x.get("dokon_nomi") or x.get("mijoz") or "Mijoz"
-                matn += f"• #{x.get('id', '—')} — {mijoz}\n  Holati: {x.get('status', 'yangi')}\n"
+                mijoz = x.get("store_name") or x.get("dokon_nomi") or x.get("mijoz") or x.get("ism") or "Mijoz"
+                raqam = x.get("id") or x.get("buyurtma_id") or "—"
+                holat = x.get("holat", x.get("status", "yangi"))
+                matn += f"• #{raqam} — {mijoz}\n  Holati: {holat}\n"
         bot.send_message(message.chat.id, matn[:4000])
     else:  # Prixod
         prixod_holati[message.from_user.id] = True
