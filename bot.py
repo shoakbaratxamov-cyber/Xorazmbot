@@ -2397,43 +2397,96 @@ def yangi_sonni_qabul_qilish(message):
 
 
 # ---------------- SAVDO KIRITISH ----------------
+SAVDO_BRENDLARI = ["Premier", "Samsung", "Karcher", "Aufit", "Sonor"]
+
+def _savdo_tugmalari(back_data=None):
+    kb = types.InlineKeyboardMarkup()
+    row = []
+    if back_data:
+        row.append(types.InlineKeyboardButton("⬅️ Orqaga", callback_data=back_data))
+    row.append(types.InlineKeyboardButton("✏️ O'zgartirish", callback_data="sale_edit"))
+    kb.row(*row)
+    kb.add(types.InlineKeyboardButton("❌ Bekor qilish", callback_data="sale_cancel"))
+    return kb
+
+def savdo_mijozlarini_korsat(chat_id, uid):
+    ids = my_store_ids(uid)
+    if not ids:
+        bot.send_message(chat_id, "❌ Sizga hali mijoz biriktirilmagan.")
+        return
+    kb = types.InlineKeyboardMarkup()
+    for sid in ids:
+        kb.add(types.InlineKeyboardButton(dokonlar[sid]["nomi"], callback_data=f"sale_store:{sid}"))
+    kb.add(types.InlineKeyboardButton("❌ Bekor qilish", callback_data="sale_cancel"))
+    bot.send_message(chat_id, "👥 Savdo qaysi mijoz uchun?", reply_markup=kb)
+
+def savdo_brendlarini_korsat(chat_id, uid):
+    st = savdo_holati.get(uid, {})
+    data = ombor_malumotlarini_oqish()
+    kb = types.InlineKeyboardMarkup()
+    for brand in SAVDO_BRENDLARI:
+        available = any(str(item[4] or "").strip().casefold() == brand.casefold() and float(item[1] or 0) > 0 for items in data.values() for item in items)
+        if available:
+            kb.add(types.InlineKeyboardButton(f"🏷 {brand}", callback_data=f"sale_brand:{brand}"))
+    kb.row(types.InlineKeyboardButton("⬅️ Orqaga", callback_data="sale_back:clients"), types.InlineKeyboardButton("✏️ O'zgartirish", callback_data="sale_edit"))
+    kb.add(types.InlineKeyboardButton("❌ Bekor qilish", callback_data="sale_cancel"))
+    bot.send_message(chat_id, "🏷 Brendni tanlang:", reply_markup=kb)
+
+def savdo_kategoriyalarini_korsat(chat_id, uid):
+    st = savdo_holati.get(uid, {})
+    brand = st.get("brend", "")
+    data = ombor_malumotlarini_oqish()
+    kb = types.InlineKeyboardMarkup()
+    for category, items in data.items():
+        if any(str(x[4] or "").strip().casefold() == brand.casefold() and float(x[1] or 0) > 0 for x in items):
+            kb.add(types.InlineKeyboardButton(f"📦 {category}", callback_data=f"sale_cat:{category}"))
+    kb.row(types.InlineKeyboardButton("⬅️ Orqaga", callback_data="sale_back:brands"), types.InlineKeyboardButton("✏️ O'zgartirish", callback_data="sale_edit"))
+    kb.add(types.InlineKeyboardButton("❌ Bekor qilish", callback_data="sale_cancel"))
+    bot.send_message(chat_id, f"📦 {brand} brendining kategoriyasini tanlang:", reply_markup=kb)
+
+def savdo_modellarini_korsat(chat_id, uid):
+    st = savdo_holati.get(uid, {})
+    data = ombor_malumotlarini_oqish()
+    kb = types.InlineKeyboardMarkup()
+    for item in data.get(st.get("kategoriya"), []):
+        if str(item[4] or "").strip().casefold() != st.get("brend", "").casefold() or float(item[1] or 0) <= 0:
+            continue
+        kb.add(types.InlineKeyboardButton(f"{item[0]} | {item[1]} dona | {item[2]:,.0f} so'm", callback_data=f"sale_model:{st['kategoriya']}|{item[0]}"))
+    kb.row(types.InlineKeyboardButton("⬅️ Orqaga", callback_data="sale_back:categories"), types.InlineKeyboardButton("✏️ O'zgartirish", callback_data="sale_edit"))
+    kb.add(types.InlineKeyboardButton("❌ Bekor qilish", callback_data="sale_cancel"))
+    bot.send_message(chat_id, "📱 Modelni tanlang:\nNarx va ombordagi qoldiq ko'rsatilgan.", reply_markup=kb)
+
 @bot.message_handler(func=lambda m: m.text == "🛒 Savdo kiritish")
 def sale_start(message):
     uid=message.from_user.id
     if not menejer_tasdiqlangan(uid):
         bot.send_message(message.chat.id,"❌ Siz tasdiqlangan menejer emassiz."); return
-    ids=my_store_ids(uid)
-    if not ids:
-        bot.send_message(message.chat.id,"❌ Sizga hali mijoz biriktirilmagan."); return
-    kb=types.InlineKeyboardMarkup()
-    for sid in ids:
-        kb.add(types.InlineKeyboardButton(dokonlar[sid]["nomi"],callback_data=f"sale_store:{sid}"))
-    bot.send_message(message.chat.id,"👥 Savdo qaysi mijoz uchun?",reply_markup=kb)
+    savdo_mijozlarini_korsat(message.chat.id, uid)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("sale_store:"))
 def sale_store(call):
     uid=call.from_user.id; sid=call.data.split(":",1)[1]
     if sid not in my_store_ids(uid):
         bot.answer_callback_query(call.id,"Bu mijoz sizga biriktirilmagan.",show_alert=True); return
-    savdo_holati[uid]={"bosqich":"kategoriya","dokon_id":sid}
+    savdo_holati[uid]={"bosqich":"brend","dokon_id":sid}
     bot.answer_callback_query(call.id)
-    try: data=ombor_malumotlarini_oqish()
-    except Exception: data={}
-    kb=types.InlineKeyboardMarkup()
-    for k in data: kb.add(types.InlineKeyboardButton(k,callback_data=f"sale_cat:{k}"))
-    bot.send_message(call.message.chat.id,"📦 Kategoriyani tanlang:",reply_markup=kb)
+    savdo_brendlarini_korsat(call.message.chat.id, uid)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_brand:"))
+def sale_brand(call):
+    uid = call.from_user.id; st = savdo_holati.get(uid)
+    if not st: return
+    st.update({"brend": call.data.split(":", 1)[1], "bosqich": "kategoriya"})
+    bot.answer_callback_query(call.id)
+    savdo_kategoriyalarini_korsat(call.message.chat.id, uid)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("sale_cat:"))
 def sale_category(call):
     uid=call.from_user.id; st=savdo_holati.get(uid)
     if not st: return
     cat=call.data.split(":",1)[1]; st["kategoriya"]=cat; st["bosqich"]="model"
-    data=ombor_malumotlarini_oqish()
-    kb=types.InlineKeyboardMarkup()
-    for item in data.get(cat,[]):
-        kb.add(types.InlineKeyboardButton(f"{item[0]} | {item[1]} dona",callback_data=f"sale_model:{cat}|{item[0]}"))
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id,"Modelni tanlang:",reply_markup=kb)
+    savdo_modellarini_korsat(call.message.chat.id, uid)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("sale_model:"))
 def sale_model(call):
@@ -2442,7 +2495,33 @@ def sale_model(call):
     cat,model=call.data.split(":",1)[1].split("|",1)
     st.update({"kategoriya":cat,"model":model,"bosqich":"son"})
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id,"🔢 Nechta dona sotildi?")
+    kb = _savdo_tugmalari("sale_back:models")
+    bot.send_message(call.message.chat.id,"🔢 Nechta dona sotildi?", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data == "sale_cancel")
+def sale_cancel(call):
+    savdo_holati.pop(call.from_user.id, None)
+    bot.answer_callback_query(call.id, "Bekor qilindi")
+    bot.send_message(call.message.chat.id, "❌ Savdo kiritish bekor qilindi.", reply_markup=menejer_menu())
+
+@bot.callback_query_handler(func=lambda c: c.data == "sale_edit")
+def sale_edit(call):
+    savdo_holati.pop(call.from_user.id, None)
+    bot.answer_callback_query(call.id)
+    savdo_mijozlarini_korsat(call.message.chat.id, call.from_user.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sale_back:"))
+def sale_back(call):
+    uid = call.from_user.id; target = call.data.split(":", 1)[1]
+    if target == "clients":
+        savdo_holati.pop(uid, None); savdo_mijozlarini_korsat(call.message.chat.id, uid)
+    elif target == "brands":
+        savdo_holati.get(uid, {}).pop("kategoriya", None); savdo_brendlarini_korsat(call.message.chat.id, uid)
+    elif target == "categories":
+        savdo_holati.get(uid, {}).pop("model", None); savdo_kategoriyalarini_korsat(call.message.chat.id, uid)
+    else:
+        savdo_holati.get(uid, {}).pop("model", None); savdo_modellarini_korsat(call.message.chat.id, uid)
+    bot.answer_callback_query(call.id)
 
 @bot.message_handler(func=lambda m: m.from_user.id in savdo_holati and savdo_holati[m.from_user.id].get("bosqich")=="son")
 def sale_quantity(message):
