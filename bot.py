@@ -660,6 +660,8 @@ def rahbar_menu():
     kb.add(types.KeyboardButton("📥 Prixod"), types.KeyboardButton("🏷 Prays"))
     kb.add(types.KeyboardButton("📈 Hisobot"), types.KeyboardButton("⚙️ Sozlamalar"))
     kb.add(types.KeyboardButton("🎉 Aksiya"), types.KeyboardButton("📚 Katalog"))
+    # Menejer ko'radigan bo'limlar rahbarda ham ko'rinadi.
+    kb.add(types.KeyboardButton("💸 Rasxod"))
     return kb
 
 # Rol menyusining tugmalari boshqa holat (state) handlerlaridan OLDIN
@@ -5280,7 +5282,7 @@ def savdo_rol_menyu_action(message):
     role = savdo_rol(message.from_user.id)
     text = message.text
     allowed = {
-        "rahbar": {"🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod", "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "🎉 Aksiya", "📚 Katalog"},
+        "rahbar": {"🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod", "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "🎉 Aksiya", "📚 Katalog", "💸 Rasxod"},
         "menejer": {"🛒 Savdo", "💵 Kassa", "📦 Ostatka", "💸 Rasxod", "🎉 Aksiya", "📚 Katalog"},
         "zavskad": {"🛒 Zakaz", "📦 Ostatka", "📥 Prixod", "🎉 Aksiya", "📚 Katalog"},
     }
@@ -5314,7 +5316,7 @@ def savdo_rol_menyu_action(message):
         kb.add(types.InlineKeyboardButton("📊 Analitika", callback_data="settings:analytics"))
         bot.send_message(message.chat.id, "⚙️ <b>Sozlamalar</b>\nKerakli bo'limni tanlang.", parse_mode="HTML", reply_markup=kb)
     elif text == "💸 Rasxod":
-        my_expense(message)
+        expense_admin(message) if role == "rahbar" else my_expense(message)
     elif text == "🛒 Zakaz":
         orders = menejer_buyurtmalarini_yuklash()
         active = [x for x in orders if x.get("status") not in {"yetkazildi", "bekor_qilindi"}]
