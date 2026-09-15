@@ -563,12 +563,53 @@ dokonlar = json_yukla(DOKONLAR_FAYLI, {})
 savdolar = json_yukla(SAVDOLAR_FAYLI, [])
 planlar = json_yukla(PLANLAR_FAYLI, {})
 rasxodlar = json_yukla(RASXODLAR_FAYLI, [])
+mijoz_import_holati = set()
 
 # Eski holat saqlash funksiyasi bilan moslik uchun (mijoz registratsiyasi ishlatilmaydi)
 kutilayotgan_royxatlar = {}
 
 def menejer_ol(user_id):
     return menedjerlar.get(str(user_id))
+
+def mijozlarni_excel_yuklash(fayl):
+    """Mijozlar.xlsx: Mijoz, Telefon, Manzil, Menejer ustunlarini yuklaydi."""
+    wb = openpyxl.load_workbook(fayl, data_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return 0, 0
+    headers = {str(v).strip().casefold(): i for i, v in enumerate(rows[0]) if v is not None}
+    name_idx = next((headers[k] for k in ("mijoz", "mijoz nomi", "nomi", "client", "client name") if k in headers), None)
+    if name_idx is None:
+        raise ValueError("Mijoz nomi ustuni topilmadi")
+    phone_idx = next((headers[k] for k in ("telefon", "tel", "phone") if k in headers), None)
+    address_idx = next((headers[k] for k in ("manzil", "address") if k in headers), None)
+    manager_idx = next((headers[k] for k in ("menejer", "menedjer", "manager") if k in headers), None)
+    manager_ids = {(str(m.get("ism", "")).strip().casefold()): uid for uid, m in menedjerlar.items()}
+    added = updated = 0
+    for row in rows[1:]:
+        if name_idx >= len(row) or not row[name_idx]:
+            continue
+        name = str(row[name_idx]).strip()
+        phone = str(row[phone_idx]).strip() if phone_idx is not None and phone_idx < len(row) and row[phone_idx] else ""
+        address = str(row[address_idx]).strip() if address_idx is not None and address_idx < len(row) and row[address_idx] else ""
+        manager_name = str(row[manager_idx]).strip().casefold() if manager_idx is not None and manager_idx < len(row) and row[manager_idx] else ""
+        manager_id = manager_ids.get(manager_name)
+        sid = next((key for key, value in dokonlar.items() if str(value.get("nomi", "")).strip().casefold() == name.casefold()), None)
+        if sid:
+            dok = dokonlar[sid]
+            dok.update({"telefon": phone or dok.get("telefon", ""), "manzil": address or dok.get("manzil", "")})
+            if manager_id:
+                dok["manager_id"] = int(manager_id)
+            updated += 1
+        else:
+            sid = "MIJ-" + str(len(dokonlar) + 1).zfill(5)
+            while sid in dokonlar:
+                sid = "MIJ-" + str(int(sid.split("-")[1]) + 1).zfill(5)
+            dokonlar[sid] = {"id": sid, "nomi": name, "telefon": phone, "manzil": address, "manager_id": int(manager_id) if manager_id else None, "sana": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            added += 1
+    json_saqlash(DOKONLAR_FAYLI, dokonlar)
+    return added, updated
 
 def menejer_tasdiqlangan(user_id):
     m = menejer_ol(user_id)
@@ -2179,6 +2220,26 @@ def yangi_fayl_qabul_qilish(message):
         return
 
     fayl_nomi = message.document.file_name or ""
+    if message.from_user.id in mijoz_import_holati:
+        mijoz_import_holati.discard(message.from_user.id)
+        if not fayl_nomi.lower().endswith(".xlsx"):
+            bot.send_message(message.chat.id, "❌ Mijozlar uchun faqat .xlsx fayl yuboring.")
+            return
+        try:
+            info = bot.get_file(message.document.file_id)
+            raw = bot.download_file(info.file_path)
+            tmp = "mijozlar_import.xlsx"
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            added, updated = mijozlarni_excel_yuklash(tmp)
+            os.remove(tmp)
+            bot.send_message(message.chat.id, f"✅ Mijozlar yuklandi.\n➕ Yangi: {added} ta\n🔄 Yangilandi: {updated} ta")
+        except ValueError as exc:
+            bot.send_message(message.chat.id, f"❌ Excel formati noto'g'ri: {exc}")
+        except Exception:
+            log.exception("Mijozlar Excel importida xatolik")
+            bot.send_message(message.chat.id, "❌ Mijozlar faylini yuklab bo'lmadi.")
+        return
     if not fayl_nomi.lower().endswith(".xlsx"):
         bot.send_message(message.chat.id, "Faqat .xlsx fayl yuboring.")
         return
@@ -2343,17 +2404,17 @@ def sale_start(message):
         bot.send_message(message.chat.id,"❌ Siz tasdiqlangan menejer emassiz."); return
     ids=my_store_ids(uid)
     if not ids:
-        bot.send_message(message.chat.id,"❌ Avval sizga do'kon biriktirilishi kerak."); return
+        bot.send_message(message.chat.id,"❌ Sizga hali mijoz biriktirilmagan."); return
     kb=types.InlineKeyboardMarkup()
     for sid in ids:
         kb.add(types.InlineKeyboardButton(dokonlar[sid]["nomi"],callback_data=f"sale_store:{sid}"))
-    bot.send_message(message.chat.id,"🏪 Savdo qaysi do'kon uchun?",reply_markup=kb)
+    bot.send_message(message.chat.id,"👥 Savdo qaysi mijoz uchun?",reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("sale_store:"))
 def sale_store(call):
     uid=call.from_user.id; sid=call.data.split(":",1)[1]
     if sid not in my_store_ids(uid):
-        bot.answer_callback_query(call.id,"Bu do'kon sizga biriktirilmagan.",show_alert=True); return
+        bot.answer_callback_query(call.id,"Bu mijoz sizga biriktirilmagan.",show_alert=True); return
     savdo_holati[uid]={"bosqich":"kategoriya","dokon_id":sid}
     bot.answer_callback_query(call.id)
     try: data=ombor_malumotlarini_oqish()
@@ -5170,7 +5231,7 @@ def savdo_rol_menyu_action(message):
     elif text == "⚙️ Sozlamalar":
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("👨‍💼 Menejerlar", callback_data="settings:managers"))
-        kb.add(types.InlineKeyboardButton("🏪 Do'konlar", callback_data="settings:stores"))
+        kb.add(types.InlineKeyboardButton("👥 Mijozlar", callback_data="settings:clients"))
         kb.add(types.InlineKeyboardButton("📊 Analitika", callback_data="settings:analytics"))
         bot.send_message(message.chat.id, "⚙️ <b>Sozlamalar</b>\nKerakli bo'limni tanlang.", parse_mode="HTML", reply_markup=kb)
     elif text == "💸 Rasxod":
@@ -5242,8 +5303,17 @@ def sozlamalar_router(call):
     tanlov = call.data.split(":", 1)[1]
     if tanlov == "managers":
         managers_list(call.message)
-    elif tanlov == "stores":
-        stores_admin(call.message)
+    elif tanlov == "clients":
+        mijoz_import_holati.add(call.from_user.id)
+        bot.send_message(
+            call.message.chat.id,
+            "👥 <b>Mijozlar Excel faylini yuklash</b>\n\n"
+            "Excelning birinchi qatorida quyidagi ustunlar bo'lsin:\n"
+            "<code>Mijoz | Telefon | Manzil | Menejer</code>\n\n"
+            "Menejer ustunidagi ism botdagi tasdiqlangan menejer ismi bilan bir xil bo'lishi kerak.\n"
+            "Endi .xlsx faylni yuboring.",
+            parse_mode="HTML"
+        )
     else:
         rahbar_analitika_menu(call.message)
 
