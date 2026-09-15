@@ -661,7 +661,7 @@ def rahbar_menu():
     kb.add(types.KeyboardButton("📈 Hisobot"), types.KeyboardButton("⚙️ Sozlamalar"))
     kb.add(types.KeyboardButton("🎉 Aksiya"), types.KeyboardButton("📚 Katalog"))
     # Menejer ko'radigan bo'limlar rahbarda ham ko'rinadi.
-    kb.add(types.KeyboardButton("💸 Rasxod"), types.KeyboardButton("🛒 Zakaz"))
+    kb.add(types.KeyboardButton("💸 Rasxod"))
     return kb
 
 # Rol menyusining tugmalari boshqa holat (state) handlerlaridan OLDIN
@@ -5280,6 +5280,26 @@ def prays_jadvali():
             lines.append(f"• {model} — {narx_matni}")
     return "\n".join(lines)[:4000]
 
+def zakazlarni_korsat(chat_id):
+    orders = json_yukla(BUYURTMALAR_FAYLI, [])
+    active = [x for x in orders if isinstance(x, dict) and x.get("holat", x.get("status", "yangi")) not in {"yetkazildi", "bekor_qilindi", "bekor_qilingan"}]
+    matn = "🛒 Ombor zakazlari\n\n"
+    if not active:
+        matn += "Hozircha faol zakaz yo'q."
+    else:
+        for x in active[-30:]:
+            mijoz = x.get("store_name") or x.get("dokon_nomi") or x.get("mijoz") or x.get("ism") or "Mijoz"
+            raqam = x.get("id") or x.get("buyurtma_id") or "—"
+            holat = x.get("holat", x.get("status", "yangi"))
+            matn += f"• #{raqam} — {mijoz}\n  Holati: {holat}\n"
+    bot.send_message(chat_id, matn[:4000])
+
+def savdo_bolim_menyu(chat_id, uid):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("➕ Savdo kiritish", callback_data="savdo_menu:entry"))
+    kb.add(types.InlineKeyboardButton("🛒 Zakazlar", callback_data="savdo_menu:orders"))
+    bot.send_message(chat_id, "🛒 <b>Savdo bo'limi</b>\nKerakli amalni tanlang:", parse_mode="HTML", reply_markup=kb)
+
 def savdo_rol_menyu_action(message):
     role = savdo_rol(message.from_user.id)
     text = message.text
@@ -5293,7 +5313,7 @@ def savdo_rol_menyu_action(message):
         return
 
     if text == "🛒 Savdo":
-        sale_start(message)
+        savdo_bolim_menyu(message.chat.id, message.from_user.id)
     elif text == "💵 Kassa":
         bot.send_message(message.chat.id, kassa_xulosasi(), parse_mode="HTML")
     elif text == "💳 Qarzdorlik":
@@ -5317,20 +5337,7 @@ def savdo_rol_menyu_action(message):
     elif text == "💸 Rasxod":
         expense_admin(message) if role == "rahbar" else my_expense(message)
     elif text == "🛒 Zakaz":
-        # Eski menejer-buyurtma fayli ayrim versiyalarda aniqlanmagan.
-        # Shu sabab zakazlar asosiy buyurtmalar.json dan o'qiladi.
-        orders = json_yukla(BUYURTMALAR_FAYLI, [])
-        active = [x for x in orders if isinstance(x, dict) and x.get("holat", x.get("status", "yangi")) not in {"yetkazildi", "bekor_qilindi", "bekor_qilingan"}]
-        matn = "🛒 Ombor zakazlari\n\n"
-        if not active:
-            matn += "Hozircha faol zakaz yo'q."
-        else:
-            for x in active[-30:]:
-                mijoz = x.get("store_name") or x.get("dokon_nomi") or x.get("mijoz") or x.get("ism") or "Mijoz"
-                raqam = x.get("id") or x.get("buyurtma_id") or "—"
-                holat = x.get("holat", x.get("status", "yangi"))
-                matn += f"• #{raqam} — {mijoz}\n  Holati: {holat}\n"
-        bot.send_message(message.chat.id, matn[:4000])
+        zakazlarni_korsat(message.chat.id)
     else:  # Prixod
         prixod_holati[message.from_user.id] = True
         bot.send_message(
@@ -5354,6 +5361,19 @@ def savdo_rol_menyu_router(message):
             message.chat.id,
             "❌ Bo'limni ochishda xatolik yuz berdi. Botni qayta ishga tushiring va yana urinib ko'ring."
         )
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("savdo_menu:"))
+def savdo_bolim_router(call):
+    role = savdo_rol(call.from_user.id)
+    if role not in {"rahbar", "menejer"}:
+        bot.answer_callback_query(call.id, "Ruxsat yo'q", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    action = call.data.split(":", 1)[1]
+    if action == "entry":
+        savdo_mijozlarini_korsat(call.message.chat.id, call.from_user.id)
+    else:
+        zakazlarni_korsat(call.message.chat.id)
 
 @bot.message_handler(content_types=["text"], func=lambda m: m.from_user.id in prixod_holati)
 def prixod_qabul_qilish(message):
