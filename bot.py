@@ -4,6 +4,7 @@ import openpyxl
 import json
 import os
 import re
+import html
 import logging
 import threading
 from datetime import datetime
@@ -5047,16 +5048,16 @@ def ombor_jadvali(sarlavha, narxlar=False):
     lines = [f"<b>{sarlavha}</b>", ""]
     jami = 0
     for kategoriya, mahsulotlar in data.items():
-        lines.append(f"<b>📁 {kategoriya}</b>")
+        lines.append(f"<b>📁 {html.escape(str(kategoriya))}</b>")
         for item in mahsulotlar[:20]:
             model = str(item[0]) if item else "Noma'lum"
             son = item[1] if len(item) > 1 else 0
             jami += int(son or 0) if str(son or 0).isdigit() else 0
             if narxlar:
                 narx = item[2] if len(item) > 2 else "—"
-                lines.append(f"• {model} — {narx} so'm")
+                lines.append(f"• {html.escape(model)} — {narx} so'm")
             else:
-                lines.append(f"• {model} — <b>{son}</b> dona")
+                lines.append(f"• {html.escape(model)} — <b>{son}</b> dona")
     if not narxlar:
         lines.extend(["", f"<b>Jami qoldiq: {jami} dona</b>"])
     return "\n".join(lines)[:4000]
@@ -5065,7 +5066,20 @@ def kassa_xulosasi():
     bugun = datetime.now().strftime("%Y-%m-%d")
     bugungi_savdo = sum(
         _float(x.get("total", x.get("summa", 0)))
-        for x in savdolar if str(x.get("sana", "")).startswith(bugun)
+        for x in (savdolar if isinstance(savdolar, list) else [])
+        if isinstance(x, dict) and str(x.get("sana", "")).startswith(bugun)
+    )
+    bugungi_rasxod = sum(
+        _float(x.get("summa", 0))
+        for x in (rasxodlar if isinstance(rasxodlar, list) else [])
+        if isinstance(x, dict) and x.get("status") == "tasdiqlangan"
+        and str(x.get("sana", "")).startswith(bugun)
+    )
+    return (
+        "💵 <b>Kassa — bugun</b>\n\n"
+        f"🛒 Savdo: <b>{bugungi_savdo:,.0f} so'm</b>\n"
+        f"💸 Tasdiqlangan rasxod: <b>{bugungi_rasxod:,.0f} so'm</b>\n"
+        f"📈 Farq: <b>{bugungi_savdo - bugungi_rasxod:,.0f} so'm</b>"
     )
 
 def aksiya_jadvali():
@@ -5084,7 +5098,11 @@ def aksiya_jadvali():
                 continue
             model = item[0] if item else "Noma'lum"
             narx = item[2] if len(item) > 2 else 0
-            lines.append(f"📁 {kategoriya}\n• <b>{model}</b> — {narx:,.0f} so'm\n🎉 {aksiya}\n")
+            lines.append(
+                f"📁 {html.escape(str(kategoriya))}\n"
+                f"• <b>{html.escape(str(model))}</b> — {float(narx or 0):,.0f} so'm\n"
+                f"🎉 {html.escape(aksiya)}\n"
+            )
             count += 1
             if count >= 40:
                 break
@@ -5093,17 +5111,6 @@ def aksiya_jadvali():
     if not count:
         return "🎉 Hozircha aksiya mahsulotlari yo'q."
     return "\n".join(lines)[:4000]
-    bugungi_rasxod = sum(
-        _float(x.get("summa", 0))
-        for x in rasxodlar
-        if x.get("status") == "tasdiqlangan" and str(x.get("sana", "")).startswith(bugun)
-    )
-    return (
-        "💵 <b>Kassa — bugun</b>\n\n"
-        f"🛒 Savdo: <b>{bugungi_savdo:,.0f} so'm</b>\n"
-        f"💸 Tasdiqlangan rasxod: <b>{bugungi_rasxod:,.0f} so'm</b>\n"
-        f"📈 Farq: <b>{bugungi_savdo - bugungi_rasxod:,.0f} so'm</b>"
-    )
 
 def savdo_rol_menyu_action(message):
     role = savdo_rol(message.from_user.id)
