@@ -63,6 +63,15 @@ for _id in _qoshimcha_rahbarlar.split(","):
     if _id.isdigit():
         RAHBAR_IDS.add(int(_id))
 
+# Zavskad (ombor mudiri) IDlari Railway'da ZAVSKAD_IDS o'zgaruvchisi orqali
+# beriladi. Masalan: ZAVSKAD_IDS=123456789,987654321
+ZAVSKAD_IDS = set()
+_qoshimcha_zavskadlar = os.getenv("ZAVSKAD_IDS", "")
+for _id in _qoshimcha_zavskadlar.split(","):
+    _id = _id.strip()
+    if _id.isdigit():
+        ZAVSKAD_IDS.add(int(_id))
+
 def admin_mi(user_id):
     """Foydalanuvchi admin/menejerlardan biri ekanini tekshiradi."""
     try:
@@ -565,31 +574,47 @@ def menejer_tasdiqlangan(user_id):
     return bool(m and m.get("status") == "tasdiqlangan")
 
 def rahbar_mi(user_id):
-    # Hozircha ADMIN_IDS rahbar hisoblanadi.
-    # Keyin alohida Rahbarlar ro'yxatiga o'tkazamiz.
-    return admin_mi(user_id)
+    try:
+        return int(user_id) in RAHBAR_IDS
+    except (TypeError, ValueError):
+        return False
+
+def zavskad_mi(user_id):
+    """Zavskad ID orqali yoki tasdiqlangan profilidagi role bilan aniqlanadi."""
+    try:
+        if int(user_id) in ZAVSKAD_IDS:
+            return True
+        info = menejer_ol(user_id)
+        role = str((info or {}).get("role", "")).strip().lower()
+        return bool(info and info.get("status") == "tasdiqlangan" and role in {"zavskad", "omborchi", "warehouse"})
+    except (TypeError, ValueError):
+        return False
 
 def menejer_ruxsat(user_id):
-    return admin_mi(user_id) or menejer_tasdiqlangan(user_id)
+    return rahbar_mi(user_id) or menejer_tasdiqlangan(user_id) or zavskad_mi(user_id)
+
+# Eski buyurtma/vazifa handlerlari shu nomdan foydalanadi.
+def menejer_mi(user_id):
+    return menejer_tasdiqlangan(user_id) and not zavskad_mi(user_id)
 
 def menejer_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton("🏪 Mening do'konlarim"))
-    kb.add(types.KeyboardButton("🛒 Savdo kiritish"), types.KeyboardButton("📊 Mening savdom"))
-    kb.add(types.KeyboardButton("🎯 Mening planim"), types.KeyboardButton("💰 Qarzdorlik"))
-    kb.add(types.KeyboardButton("💸 Rasxod"), types.KeyboardButton("📦 Buyurtmalar"))
-    kb.add(types.KeyboardButton("👤 Profilim"))
+    kb.add(types.KeyboardButton("🛒 Savdo"), types.KeyboardButton("💵 Kassa"))
+    kb.add(types.KeyboardButton("📦 Ostatka"), types.KeyboardButton("💸 Rasxod"))
+    return kb
+
+def zavskad_menu():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("🛒 Zakaz"), types.KeyboardButton("📦 Ostatka"))
+    kb.add(types.KeyboardButton("📥 Prixod"))
     return kb
 
 def rahbar_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton("👨‍💼 Menejerlar"), types.KeyboardButton("🏪 Do'konlar"))
-    kb.add(types.KeyboardButton("📊 Umumiy savdo"), types.KeyboardButton("🏆 Menejerlar reytingi"))
-    kb.add(types.KeyboardButton("🎯 Planlar"), types.KeyboardButton("💰 Qarzdorlik"))
-    kb.add(types.KeyboardButton("💸 Rasxodlar"))
-    kb.add(types.KeyboardButton("📈 Savdo analitikasi"))
-    kb.add(types.KeyboardButton("📷 Mahsulot rasmi"), types.KeyboardButton("🎉 Aksiya qo'shish"))
-    kb.add(types.KeyboardButton("🔄 Ombor sonini yangilash"))
+    kb.add(types.KeyboardButton("🛒 Savdo"), types.KeyboardButton("💵 Kassa"))
+    kb.add(types.KeyboardButton("💳 Qarzdorlik"), types.KeyboardButton("📦 Ostatka"))
+    kb.add(types.KeyboardButton("📥 Prixod"), types.KeyboardButton("🏷 Prays"))
+    kb.add(types.KeyboardButton("📈 Hisobot"), types.KeyboardButton("⚙️ Sozlamalar"))
     return kb
 
 
@@ -696,7 +721,8 @@ def menejer_royxatdan_otishni_boshlash(chat_id):
     if mavjud:
         status = mavjud.get("status")
         if status == "tasdiqlangan":
-            bot.send_message(chat_id, "✅ Sizning menejer profilingiz tasdiqlangan.", reply_markup=menejer_menu())
+            menu = zavskad_menu() if zavskad_mi(uid) else menejer_menu()
+            bot.send_message(chat_id, "✅ Profilingiz tasdiqlangan.", reply_markup=menu)
         elif status == "kutilmoqda":
             bot.send_message(chat_id, "⏳ Arizangiz admin tasdig'ini kutmoqda.")
         else:
@@ -810,7 +836,7 @@ def manager_approve(call):
         bot.send_message(uid,
             "🎉 Tabriklaymiz! Menejerlik profilingiz tasdiqlandi.\n\n"
             "Endi /start orqali menejer panelidan foydalanishingiz mumkin.",
-            reply_markup=menejer_menu())
+            reply_markup=zavskad_menu() if zavskad_mi(uid) else menejer_menu())
     except Exception:
         pass
 
@@ -842,8 +868,11 @@ def manager_reject(call):
 @bot.message_handler(commands=["start"])
 def start_handler_manager(message):
     uid = message.from_user.id
-    if admin_mi(uid):
+    if rahbar_mi(uid):
         bot.send_message(message.chat.id, "👑 Rahbar paneli", reply_markup=rahbar_menu())
+        return
+    if zavskad_mi(uid):
+        bot.send_message(message.chat.id, "📦 Zavskad paneli", reply_markup=zavskad_menu())
         return
     if menejer_tasdiqlangan(uid):
         bot.send_message(message.chat.id, "👨‍💼 Menejer paneli", reply_markup=menejer_menu())
@@ -4961,6 +4990,165 @@ def final_test_command(message):
         parse_mode="HTML"
     )
 
+
+# ============================================================
+# SAVDO ROLLARI: RAHBAR / MENEJER / ZAVSKAD
+# ============================================================
+
+prixod_holati = {}
+
+def savdo_rol(user_id):
+    if rahbar_mi(user_id):
+        return "rahbar"
+    if zavskad_mi(user_id):
+        return "zavskad"
+    if menejer_mi(user_id):
+        return "menejer"
+    return None
+
+def rol_xabari(message):
+    bot.send_message(message.chat.id, "❌ Bu bo'lim sizning rolingiz uchun ruxsat etilmagan.")
+
+def ombor_jadvali(sarlavha, narxlar=False):
+    try:
+        data = ombor_malumotlarini_oqish()
+    except Exception:
+        log.exception("Ombor ma'lumotini o'qib bo'lmadi")
+        return "❌ Ombor ma'lumotini o'qib bo'lmadi."
+
+    if not data:
+        return "📦 Omborda mahsulot yo'q."
+
+    lines = [f"<b>{sarlavha}</b>", ""]
+    jami = 0
+    for kategoriya, mahsulotlar in data.items():
+        lines.append(f"<b>📁 {kategoriya}</b>")
+        for item in mahsulotlar[:20]:
+            model = str(item[0]) if item else "Noma'lum"
+            son = item[1] if len(item) > 1 else 0
+            jami += int(son or 0) if str(son or 0).isdigit() else 0
+            if narxlar:
+                narx = item[2] if len(item) > 2 else "—"
+                lines.append(f"• {model} — {narx} so'm")
+            else:
+                lines.append(f"• {model} — <b>{son}</b> dona")
+    if not narxlar:
+        lines.extend(["", f"<b>Jami qoldiq: {jami} dona</b>"])
+    return "\n".join(lines)[:4000]
+
+def kassa_xulosasi():
+    bugun = datetime.now().strftime("%Y-%m-%d")
+    bugungi_savdo = sum(
+        _float(x.get("total", x.get("summa", 0)))
+        for x in savdolar if str(x.get("sana", "")).startswith(bugun)
+    )
+    bugungi_rasxod = sum(
+        _float(x.get("summa", 0))
+        for x in rasxodlar
+        if x.get("status") == "tasdiqlangan" and str(x.get("sana", "")).startswith(bugun)
+    )
+    return (
+        "💵 <b>Kassa — bugun</b>\n\n"
+        f"🛒 Savdo: <b>{bugungi_savdo:,.0f} so'm</b>\n"
+        f"💸 Tasdiqlangan rasxod: <b>{bugungi_rasxod:,.0f} so'm</b>\n"
+        f"📈 Farq: <b>{bugungi_savdo - bugungi_rasxod:,.0f} so'm</b>"
+    )
+
+@bot.message_handler(func=lambda m: m.text in {
+    "🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod",
+    "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "💸 Rasxod", "🛒 Zakaz"
+})
+def savdo_rol_menyu_router(message):
+    role = savdo_rol(message.from_user.id)
+    text = message.text
+    allowed = {
+        "rahbar": {"🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod", "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar"},
+        "menejer": {"🛒 Savdo", "💵 Kassa", "📦 Ostatka", "💸 Rasxod"},
+        "zavskad": {"🛒 Zakaz", "📦 Ostatka", "📥 Prixod"},
+    }
+    if not role or text not in allowed[role]:
+        rol_xabari(message)
+        return
+
+    if text == "🛒 Savdo":
+        if role == "rahbar":
+            rahbar_umumiy_savdo_dashboard(message)
+        else:
+            sale_start(message)
+    elif text == "💵 Kassa":
+        bot.send_message(message.chat.id, kassa_xulosasi(), parse_mode="HTML")
+    elif text == "💳 Qarzdorlik":
+        qarz_dokonlar_xabari(message.chat.id, message.from_user.id, rahbar=(role == "rahbar"))
+    elif text == "📦 Ostatka":
+        bot.send_message(message.chat.id, ombor_jadvali("📦 OSTATKA"), parse_mode="HTML")
+    elif text == "🏷 Prays":
+        bot.send_message(message.chat.id, ombor_jadvali("🏷 PRAYS", narxlar=True), parse_mode="HTML")
+    elif text == "📈 Hisobot":
+        rahbar_hisobotlar_menu(message)
+    elif text == "⚙️ Sozlamalar":
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("👨‍💼 Menejerlar", callback_data="settings:managers"))
+        kb.add(types.InlineKeyboardButton("🏪 Do'konlar", callback_data="settings:stores"))
+        kb.add(types.InlineKeyboardButton("📊 Analitika", callback_data="settings:analytics"))
+        bot.send_message(message.chat.id, "⚙️ <b>Sozlamalar</b>\nKerakli bo'limni tanlang.", parse_mode="HTML", reply_markup=kb)
+    elif text == "💸 Rasxod":
+        my_expense(message)
+    elif text == "🛒 Zakaz":
+        orders = menejer_buyurtmalarini_yuklash()
+        active = [x for x in orders if x.get("status") not in {"yetkazildi", "bekor_qilindi"}]
+        matn = "🛒 <b>Ombor zakazlari</b>\n\n"
+        if not active:
+            matn += "Hozircha faol zakaz yo'q."
+        else:
+            for x in active[-30:]:
+                matn += f"• #{x.get('id', '—')} — {x.get('store_name', 'Do\'kon')}\n  {x.get('status', 'yangi')}\n"
+        bot.send_message(message.chat.id, matn, parse_mode="HTML")
+    else:  # Prixod
+        prixod_holati[message.from_user.id] = True
+        bot.send_message(
+            message.chat.id,
+            "📥 <b>Prixod kiritish</b>\n\nKategoriya | Model | Soni formatida yuboring.\n"
+            "Masalan: <code>Televizor | Samsung UE50 | 5</code>",
+            parse_mode="HTML"
+        )
+
+@bot.message_handler(content_types=["text"], func=lambda m: m.from_user.id in prixod_holati)
+def prixod_qabul_qilish(message):
+    if savdo_rol(message.from_user.id) not in {"rahbar", "zavskad"}:
+        prixod_holati.pop(message.from_user.id, None)
+        rol_xabari(message)
+        return
+    try:
+        kategoriya, model, son = [x.strip() for x in message.text.split("|", 2)]
+        son = int(son)
+        if son <= 0:
+            raise ValueError
+        data = ombor_malumotlarini_oqish()
+        current = next((x[1] for x in data.get(kategoriya, []) if str(x[0]) == model), None)
+        if current is None:
+            bot.send_message(message.chat.id, "❌ Model topilmadi. Kategoriya va model nomini Baza.xlsx dagidek yozing.")
+            return
+        if not ombor_sonini_yangilash(kategoriya, model, int(current) + son):
+            bot.send_message(message.chat.id, "❌ Prixodni saqlab bo'lmadi.")
+            return
+        prixod_holati.pop(message.from_user.id, None)
+        bot.send_message(message.chat.id, f"✅ Prixod saqlandi: {model} +{son} dona. Yangi qoldiq: {int(current) + son} dona.")
+    except (ValueError, IndexError):
+        bot.send_message(message.chat.id, "❌ Format: Kategoriya | Model | Soni. Masalan: Televizor | Samsung UE50 | 5")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("settings:"))
+def sozlamalar_router(call):
+    if not rahbar_mi(call.from_user.id):
+        bot.answer_callback_query(call.id, "Ruxsat yo'q", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    tanlov = call.data.split(":", 1)[1]
+    if tanlov == "managers":
+        managers_list(call.message)
+    elif tanlov == "stores":
+        stores_admin(call.message)
+    else:
+        rahbar_analitika_menu(call.message)
 
 if __name__ == "__main__":
     hisoblagichni_tiklash()
