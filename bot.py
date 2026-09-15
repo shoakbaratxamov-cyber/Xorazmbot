@@ -5112,6 +5112,30 @@ def aksiya_jadvali():
         return "🎉 Hozircha aksiya mahsulotlari yo'q."
     return "\n".join(lines)[:4000]
 
+def prays_jadvali():
+    """Excel'dagi har qanday qiymat bilan ishlaydigan, Telegram HTML'siz prays."""
+    try:
+        data = ombor_malumotlarini_oqish()
+    except Exception:
+        log.exception("Prays ma'lumotini o'qib bo'lmadi")
+        return "Praysni o'qib bo'lmadi."
+
+    if not data:
+        return "Hozircha praysda mahsulot yo'q."
+
+    lines = ["🏷 PRAYS", ""]
+    for kategoriya, mahsulotlar in data.items():
+        lines.append(f"📁 {str(kategoriya)}")
+        for item in mahsulotlar[:25]:
+            model = str(item[0]) if item else "Noma'lum"
+            narx = item[2] if len(item) > 2 else 0
+            try:
+                narx_matni = f"{float(narx or 0):,.0f} so'm"
+            except (TypeError, ValueError):
+                narx_matni = str(narx or "0") + " so'm"
+            lines.append(f"• {model} — {narx_matni}")
+    return "\n".join(lines)[:4000]
+
 def savdo_rol_menyu_action(message):
     role = savdo_rol(message.from_user.id)
     text = message.text
@@ -5136,7 +5160,7 @@ def savdo_rol_menyu_action(message):
     elif text == "📦 Ostatka":
         bot.send_message(message.chat.id, ombor_jadvali("📦 OSTATKA"), parse_mode="HTML")
     elif text == "🏷 Prays":
-        bot.send_message(message.chat.id, ombor_jadvali("🏷 PRAYS", narxlar=True), parse_mode="HTML")
+        bot.send_message(message.chat.id, prays_jadvali())
     elif text == "📚 Katalog":
         bot.send_message(message.chat.id, ombor_jadvali("📚 KATALOG", narxlar=True), parse_mode="HTML")
     elif text == "🎉 Aksiya":
