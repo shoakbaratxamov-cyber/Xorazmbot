@@ -5054,11 +5054,7 @@ def kassa_xulosasi():
         f"📈 Farq: <b>{bugungi_savdo - bugungi_rasxod:,.0f} so'm</b>"
     )
 
-@bot.message_handler(func=lambda m: m.text in {
-    "🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod",
-    "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "💸 Rasxod", "🛒 Zakaz"
-})
-def savdo_rol_menyu_router(message):
+def savdo_rol_menyu_action(message):
     role = savdo_rol(message.from_user.id)
     text = message.text
     allowed = {
@@ -5110,6 +5106,20 @@ def savdo_rol_menyu_router(message):
             "📥 <b>Prixod kiritish</b>\n\nKategoriya | Model | Soni formatida yuboring.\n"
             "Masalan: <code>Televizor | Samsung UE50 | 5</code>",
             parse_mode="HTML"
+        )
+
+@bot.message_handler(func=lambda m: m.text in {
+    "🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod",
+    "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "💸 Rasxod", "🛒 Zakaz"
+})
+def savdo_rol_menyu_router(message):
+    try:
+        savdo_rol_menyu_action(message)
+    except Exception:
+        log.exception("Rol menyusi ochilmadi: %s", message.text)
+        bot.send_message(
+            message.chat.id,
+            "❌ Bo'limni ochishda xatolik yuz berdi. Botni qayta ishga tushiring va yana urinib ko'ring."
         )
 
 @bot.message_handler(content_types=["text"], func=lambda m: m.from_user.id in prixod_holati)
