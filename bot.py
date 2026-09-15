@@ -601,12 +601,14 @@ def menejer_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(types.KeyboardButton("🛒 Savdo"), types.KeyboardButton("💵 Kassa"))
     kb.add(types.KeyboardButton("📦 Ostatka"), types.KeyboardButton("💸 Rasxod"))
+    kb.add(types.KeyboardButton("🎉 Aksiya"), types.KeyboardButton("📚 Katalog"))
     return kb
 
 def zavskad_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(types.KeyboardButton("🛒 Zakaz"), types.KeyboardButton("📦 Ostatka"))
     kb.add(types.KeyboardButton("📥 Prixod"))
+    kb.add(types.KeyboardButton("🎉 Aksiya"), types.KeyboardButton("📚 Katalog"))
     return kb
 
 def rahbar_menu():
@@ -615,6 +617,7 @@ def rahbar_menu():
     kb.add(types.KeyboardButton("💳 Qarzdorlik"), types.KeyboardButton("📦 Ostatka"))
     kb.add(types.KeyboardButton("📥 Prixod"), types.KeyboardButton("🏷 Prays"))
     kb.add(types.KeyboardButton("📈 Hisobot"), types.KeyboardButton("⚙️ Sozlamalar"))
+    kb.add(types.KeyboardButton("🎉 Aksiya"), types.KeyboardButton("📚 Katalog"))
     return kb
 
 
@@ -5042,6 +5045,32 @@ def kassa_xulosasi():
         _float(x.get("total", x.get("summa", 0)))
         for x in savdolar if str(x.get("sana", "")).startswith(bugun)
     )
+
+def aksiya_jadvali():
+    try:
+        data = ombor_malumotlarini_oqish()
+    except Exception:
+        log.exception("Aksiya ma'lumotini o'qib bo'lmadi")
+        return "❌ Aksiya ma'lumotini o'qib bo'lmadi."
+
+    lines = ["🎉 <b>AKSIYADAGI MAHSULOTLAR</b>", ""]
+    count = 0
+    for kategoriya, mahsulotlar in data.items():
+        for item in mahsulotlar:
+            aksiya = str(item[5] or "").strip() if len(item) > 5 else ""
+            if not aksiya:
+                continue
+            model = item[0] if item else "Noma'lum"
+            narx = item[2] if len(item) > 2 else 0
+            lines.append(f"📁 {kategoriya}\n• <b>{model}</b> — {narx:,.0f} so'm\n🎉 {aksiya}\n")
+            count += 1
+            if count >= 40:
+                break
+        if count >= 40:
+            break
+    if not count:
+        return "🎉 Hozircha aksiya mahsulotlari yo'q."
+    return "\n".join(lines)[:4000]
     bugungi_rasxod = sum(
         _float(x.get("summa", 0))
         for x in rasxodlar
@@ -5058,9 +5087,9 @@ def savdo_rol_menyu_action(message):
     role = savdo_rol(message.from_user.id)
     text = message.text
     allowed = {
-        "rahbar": {"🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod", "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar"},
-        "menejer": {"🛒 Savdo", "💵 Kassa", "📦 Ostatka", "💸 Rasxod"},
-        "zavskad": {"🛒 Zakaz", "📦 Ostatka", "📥 Prixod"},
+        "rahbar": {"🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod", "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "🎉 Aksiya", "📚 Katalog"},
+        "menejer": {"🛒 Savdo", "💵 Kassa", "📦 Ostatka", "💸 Rasxod", "🎉 Aksiya", "📚 Katalog"},
+        "zavskad": {"🛒 Zakaz", "📦 Ostatka", "📥 Prixod", "🎉 Aksiya", "📚 Katalog"},
     }
     if not role or text not in allowed[role]:
         rol_xabari(message)
@@ -5079,6 +5108,10 @@ def savdo_rol_menyu_action(message):
         bot.send_message(message.chat.id, ombor_jadvali("📦 OSTATKA"), parse_mode="HTML")
     elif text == "🏷 Prays":
         bot.send_message(message.chat.id, ombor_jadvali("🏷 PRAYS", narxlar=True), parse_mode="HTML")
+    elif text == "📚 Katalog":
+        bot.send_message(message.chat.id, ombor_jadvali("📚 KATALOG", narxlar=True), parse_mode="HTML")
+    elif text == "🎉 Aksiya":
+        bot.send_message(message.chat.id, aksiya_jadvali(), parse_mode="HTML")
     elif text == "📈 Hisobot":
         rahbar_hisobotlar_menu(message)
     elif text == "⚙️ Sozlamalar":
@@ -5110,7 +5143,8 @@ def savdo_rol_menyu_action(message):
 
 @bot.message_handler(func=lambda m: m.text in {
     "🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod",
-    "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "💸 Rasxod", "🛒 Zakaz"
+    "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "💸 Rasxod", "🛒 Zakaz",
+    "🎉 Aksiya", "📚 Katalog"
 })
 def savdo_rol_menyu_router(message):
     try:
