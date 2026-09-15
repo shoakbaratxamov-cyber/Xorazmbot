@@ -661,7 +661,7 @@ def rahbar_menu():
     kb.add(types.KeyboardButton("📈 Hisobot"), types.KeyboardButton("⚙️ Sozlamalar"))
     kb.add(types.KeyboardButton("🎉 Aksiya"), types.KeyboardButton("📚 Katalog"))
     # Menejer ko'radigan bo'limlar rahbarda ham ko'rinadi.
-    kb.add(types.KeyboardButton("💸 Rasxod"))
+    kb.add(types.KeyboardButton("💸 Rasxod"), types.KeyboardButton("🛒 Zakaz"))
     return kb
 
 # Rol menyusining tugmalari boshqa holat (state) handlerlaridan OLDIN
@@ -2412,9 +2412,11 @@ def _savdo_tugmalari(back_data=None):
     return kb
 
 def savdo_mijozlarini_korsat(chat_id, uid):
-    ids = my_store_ids(uid)
+    # Rahbar barcha mijoz nomidan savdo kiritishi mumkin; menejer esa faqat
+    # o'ziga biriktirilgan mijozlarni ko'radi.
+    ids = list(dokonlar.keys()) if rahbar_mi(uid) else my_store_ids(uid)
     if not ids:
-        bot.send_message(chat_id, "❌ Sizga hali mijoz biriktirilmagan.")
+        bot.send_message(chat_id, "❌ Hozircha mijozlar bazasi yuklanmagan.")
         return
     kb = types.InlineKeyboardMarkup()
     for sid in ids:
@@ -2461,14 +2463,14 @@ def savdo_modellarini_korsat(chat_id, uid):
 @bot.message_handler(func=lambda m: m.text == "🛒 Savdo kiritish")
 def sale_start(message):
     uid=message.from_user.id
-    if not menejer_tasdiqlangan(uid):
+    if not rahbar_mi(uid) and not menejer_tasdiqlangan(uid):
         bot.send_message(message.chat.id,"❌ Siz tasdiqlangan menejer emassiz."); return
     savdo_mijozlarini_korsat(message.chat.id, uid)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("sale_store:"))
 def sale_store(call):
     uid=call.from_user.id; sid=call.data.split(":",1)[1]
-    if sid not in my_store_ids(uid):
+    if not rahbar_mi(uid) and sid not in my_store_ids(uid):
         bot.answer_callback_query(call.id,"Bu mijoz sizga biriktirilmagan.",show_alert=True); return
     savdo_holati[uid]={"bosqich":"brend","dokon_id":sid}
     bot.answer_callback_query(call.id)
@@ -5282,7 +5284,7 @@ def savdo_rol_menyu_action(message):
     role = savdo_rol(message.from_user.id)
     text = message.text
     allowed = {
-        "rahbar": {"🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod", "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "🎉 Aksiya", "📚 Katalog", "💸 Rasxod"},
+        "rahbar": {"🛒 Savdo", "💵 Kassa", "💳 Qarzdorlik", "📦 Ostatka", "📥 Prixod", "🏷 Prays", "📈 Hisobot", "⚙️ Sozlamalar", "🎉 Aksiya", "📚 Katalog", "💸 Rasxod", "🛒 Zakaz"},
         "menejer": {"🛒 Savdo", "💵 Kassa", "📦 Ostatka", "💸 Rasxod", "🎉 Aksiya", "📚 Katalog"},
         "zavskad": {"🛒 Zakaz", "📦 Ostatka", "📥 Prixod", "🎉 Aksiya", "📚 Katalog"},
     }
@@ -5291,10 +5293,7 @@ def savdo_rol_menyu_action(message):
         return
 
     if text == "🛒 Savdo":
-        if role == "rahbar":
-            rahbar_umumiy_savdo_dashboard(message)
-        else:
-            sale_start(message)
+        sale_start(message)
     elif text == "💵 Kassa":
         bot.send_message(message.chat.id, kassa_xulosasi(), parse_mode="HTML")
     elif text == "💳 Qarzdorlik":
